@@ -1,0 +1,106 @@
+# DevPipeline 基础设施一键启动（MariaDB / PostgreSQL / Redis）
+#
+# 职责边界：
+#   mariadb  —— 业务库（项目、需求、版本、产物、运行记录、配置）
+#   postgres —— 只放 LangGraph checkpointer 表（由 AsyncPostgresSaver.setup() 自建）
+#   redis    —— arq 任务队列 + run 事件广播
+#
+# 本版只含三库。M1 完成后在同一文件追加 api / worker / frontend 服务，
+# 用 `docker compose up -d` 起全栈，或只起基础设施：`docker compose up -d mariadb postgres redis`。
+#
+# 详细步骤、验收命令、安全组与回填方式见 deploy/README.md。
+
+name: devpipeline
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: devpipeline-mariadb
+    restart: unless-stopped
+    # 字符集在服务器级钉死，避免建表时继承到 latin1；表级仍由 Alembic 显式声明。
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=512M
+      - --max-connections=200
+    environment:
+      TZ: UTC
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?deploy/.env 缺少 MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-devpipeline}
+      MARIADB_USER: ${MARIADB_USER:-devpipeline}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?deploy/.env 缺少 MARIADB_PASSWORD}
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${MARIADB_HOST_PORT:-13306}:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      # 仅在数据目录为空（首次启动）时执行：把业务库 collation 兜底成 utf8mb4_unicode_ci
+      - ./initdb/mariadb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u root -p\"$$MARIADB_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks:
+      - devpipeline-net
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: devpipeline-postgres
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+      POSTGRES_DB: ${POSTGRES_DB:-devpipeline_graph}
+      POSTGRES_USER: ${POSTGRES_USER:-devpipeline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?deploy/.env 缺少 POSTGRES_PASSWORD}
+      # 数据放子目录，避免 named volume 根目录权限问题
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${POSTGRES_HOST_PORT:-15432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - devpipeline-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: devpipeline-redis
+    restart: unless-stopped
+    # 暴露到公网必须带密码；AOF 打开，重启不丢队列与事件
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?deploy/.env 缺少 REDIS_PASSWORD}
+    environment:
+      TZ: UTC
+      # 供 healthcheck 使用；注意 `docker inspect` 能看到，与 compose 文件明文同级风险
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?deploy/.env 缺少 REDIS_PASSWORD}
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:${REDIS_HOST_PORT:-16379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - devpipeline-net
+
+volumes:
+  mariadb-data:
+  postgres-data:
+  redis-data:
+
+networks:
+  devpipeline-net:
+    driver: bridge
