@@ -12,8 +12,16 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.db.session import get_session_factory
-from app.models import Artifact, PipelineRun, Requirement, RequirementVersion, StageApproval, StageRun
-from app.queue import inline
+from app.models import (
+    Artifact,
+    PipelineRun,
+    Requirement,
+    RequirementVersion,
+    RunEvent,
+    StageApproval,
+    StageRun,
+)
+from app.queue import dispatcher
 
 logger = get_logger(__name__)
 
@@ -104,9 +112,7 @@ async def create_run(
     await session.commit()
 
     if enqueue:
-        from app.services.run_executor import execute_run
-
-        inline.submit(execute_run(run.id), name=f"run-{run.id}")
+        await dispatcher.enqueue_run(run.id)
     return run
 
 
@@ -223,16 +229,39 @@ async def decide(
     await session.commit()
 
     if enqueue:
-        from app.services.run_executor import execute_run
-
-        inline.submit(
-            execute_run(
-                run.id,
-                resume_payload=payload.model_dump(exclude_none=True),
-            ),
-            name=f"resume-{run.id}",
+        await _emit_event_best_effort(
+            run.id,
+            "decision",
+            {
+                "stage": pending.get("stage"),
+                "decision": payload.decision,
+                "feedback": payload.feedback,
+                "artifact_id": pending.get("artifact_id"),
+            },
+            stage=pending.get("stage"),
+        )
+        await dispatcher.enqueue_run(
+            run.id, resume_payload=payload.model_dump(exclude_none=True)
         )
     return approval
+
+
+async def _emit_event_best_effort(
+    run_id: int, event_type: str, payload: dict[str, Any], *, stage: str | None = None
+) -> None:
+    """审计类事件（decision/取消）不能因为 Redis 抖动影响主流程。"""
+    try:
+        from app.services.events import EventLogger
+
+        events = EventLogger(run_id, publish=True)
+        try:
+            await events.emit(event_type, payload, stage=stage)
+        finally:
+            await events.close()
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "event_emit_failed", extra={"run_id": run_id, "type": event_type}
+        )
 
 
 async def retry_run(session: AsyncSession, run_id: int) -> PipelineRun:
@@ -243,7 +272,7 @@ async def retry_run(session: AsyncSession, run_id: int) -> PipelineRun:
     if run.status not in {"failed", "cancelled"}:
         raise ConflictError("只有 failed / cancelled 的运行可以重试")
 
-    from app.services.run_executor import execute_run, get_graph, graph_config
+    from app.services.run_executor import get_graph, graph_config
 
     graph = await get_graph()
     snapshot = await graph.aget_state(graph_config(run))
@@ -257,7 +286,7 @@ async def retry_run(session: AsyncSession, run_id: int) -> PipelineRun:
     run.finished_at = None
     run.updated_at = utcnow()
     await session.commit()
-    inline.submit(execute_run(run.id, continue_run=True), name=f"retry-{run.id}")
+    await dispatcher.enqueue_run(run.id, continue_run=True)
     return run
 
 
@@ -276,7 +305,25 @@ async def cancel_run(session: AsyncSession, run_id: int) -> PipelineRun:
         requirement.status = "cancelled"
         requirement.updated_at = utcnow()
     await session.commit()
+    await _emit_event_best_effort(
+        run.id, "run_finished", {"status": "cancelled", "error_code": None}
+    )
     return run
+
+
+async def list_events(
+    session: AsyncSession,
+    run_id: int,
+    *,
+    after_seq: int = 0,
+    page_size: int = 200,
+    types: list[str] | None = None,
+) -> list[RunEvent]:
+    stmt = select(RunEvent).where(RunEvent.run_id == run_id, RunEvent.seq > after_seq)
+    if types:
+        stmt = stmt.where(RunEvent.type.in_(types))
+    stmt = stmt.order_by(RunEvent.seq).limit(page_size)
+    return list((await session.execute(stmt)).scalars().all())
 
 
 async def list_states(run: PipelineRun, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -343,7 +390,7 @@ async def reconcile_run(session: AsyncSession, run: PipelineRun) -> PipelineRun:
 
 async def requeue_incomplete() -> int:
     """启动时兜底：进程内队列随重启丢失，按 checkpoint 把未完成的 run 重新挂上。"""
-    from app.services.run_executor import execute_run, get_graph, graph_config
+    from app.services.run_executor import get_graph, graph_config
 
     count = 0
     async with get_session_factory()() as session:
@@ -368,9 +415,9 @@ async def requeue_incomplete() -> int:
         if getattr(snapshot, "interrupts", None):
             continue  # 等人工审批，不重跑
         if getattr(snapshot, "next", None):
-            inline.submit(execute_run(run.id, continue_run=True), name=f"resume-{run.id}")
+            await dispatcher.enqueue_run(run.id, continue_run=True)
             count += 1
         elif not (snapshot.values or {}):
-            inline.submit(execute_run(run.id), name=f"run-{run.id}")
+            await dispatcher.enqueue_run(run.id)
             count += 1
     return count

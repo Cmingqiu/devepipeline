@@ -18,6 +18,12 @@ if sys.platform == "win32":
 
 
 @pytest.fixture(autouse=True)
+def _force_inline_queue(monkeypatch: pytest.MonkeyPatch):
+    """测试不启动 arq worker：HTTP 触发执行时走进程内队列，断言才可控。"""
+    monkeypatch.setattr(get_settings(), "queue_backend", "inline", raising=False)
+
+
+@pytest.fixture(autouse=True)
 async def _close_global_resources():
     """pytest-asyncio 每个用例一个新事件循环；全局连接池必须跟着关，否则下个用例复用会报
     'Event loop is closed' / 'attached to a different loop'。"""
@@ -35,6 +41,12 @@ async def _close_global_resources():
         from app.db.session import dispose_engine
 
         await dispose_engine()
+    except Exception:  # noqa: BLE001, S110  同上
+        pass
+    try:
+        from app.services.events import close_redis
+
+        await close_redis()
     except Exception:  # noqa: BLE001, S110  同上
         pass
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Query, Response, status
 
 from app.api.v1.deps import PaginationDep, SessionDep
@@ -7,6 +9,7 @@ from app.schemas.common import Page
 from app.schemas.run import (
     ApprovalIn,
     ApprovalOut,
+    EventOut,
     PendingApproval,
     RunCreate,
     RunDetail,
@@ -114,6 +117,35 @@ async def list_states(
     run = await run_service.get_run(session, run_id, reconcile=False)
     items = await run_service.list_states(run, limit=limit)
     return [StateSummary(**item) for item in items]
+
+
+@router.get(
+    "/runs/{run_id}/events",
+    response_model=list[EventOut],
+    summary="事件历史（after_seq 游标，SSE 断线后可补齐）",
+)
+async def list_events(
+    session: SessionDep,
+    run_id: int,
+    after_seq: int = Query(default=0, ge=0),
+    page_size: int = Query(default=200, ge=1, le=1000),
+    types: str | None = Query(default=None, description="逗号分隔的事件类型过滤"),
+) -> list[EventOut]:
+    await run_service.get_run(session, run_id, reconcile=False)
+    type_list = [item.strip() for item in types.split(",") if item.strip()] if types else None
+    rows = await run_service.list_events(
+        session, run_id, after_seq=after_seq, page_size=page_size, types=type_list
+    )
+    return [
+        EventOut(
+            seq=row.seq,
+            ts=row.created_at,
+            stage=row.stage,
+            type=row.type,
+            payload=json.loads(row.payload or "{}"),
+        )
+        for row in rows
+    ]
 
 
 @router.post(

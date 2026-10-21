@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -103,3 +103,11 @@ class StateSummary(BaseModel):
     created_at: str | None = None
     has_interrupt: bool = False
     error: str | None = None
+
+
+class EventOut(BaseModel):
+    seq: int
+    ts: UtcDatetime
+    stage: str | None = None
+    type: str
+    payload: dict[str, Any] = Field(default_factory=dict)

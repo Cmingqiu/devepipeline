@@ -116,6 +116,8 @@ REDIS_HOST=<vps-host>
 REDIS_PORT=16379
 REDIS_PASSWORD=<REDIS_PASSWORD>
 REDIS_DB=0
+# 队列后端：arq（Redis 队列，M3 起正式路径；需同时起 worker）/ inline（进程内，零依赖）
+QUEUE_BACKEND=arq
 
 # LLM（DeepSeek，OpenAI 兼容）
 LLM_KEY_DEEPSEEK=<你的 key>

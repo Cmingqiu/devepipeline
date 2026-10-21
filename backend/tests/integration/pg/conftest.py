@@ -29,6 +29,7 @@ async def _cleanup_project(project_id: int) -> None:
             "delete a from artifacts a join pipeline_runs r on a.run_id = r.id where r.project_id = :pid",
             "delete s from stage_runs s join pipeline_runs r on s.run_id = r.id where r.project_id = :pid",
             "delete p from stage_approvals p join pipeline_runs r on p.run_id = r.id where r.project_id = :pid",
+            "delete e from run_events e join pipeline_runs r on e.run_id = r.id where r.project_id = :pid",
             "delete from pipeline_runs where project_id = :pid",
             (
                 "delete from requirement_versions where requirement_id in "

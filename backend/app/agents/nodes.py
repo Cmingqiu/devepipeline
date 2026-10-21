@@ -48,6 +48,39 @@ def _summary(text: str, limit: int = 300) -> str:
     return " ".join((text or "").split())[:limit]
 
 
+def _chunk_text(chunk: Any) -> str:
+    """流式 chunk 的正文：不做 strip，否则 token 之间的空格会丢。"""
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") in {"text", "output_text"}:
+                parts.append(str(block.get("text", "")))
+        return "".join(parts)
+    return ""
+
+
+async def _call_model(model: Any, messages: list[Any]) -> tuple[str, dict[str, int]]:
+    """优先流式（messages 模式才能吐出增量 token），没有 astream 的假模型退回 ainvoke。"""
+    astream = getattr(model, "astream", None)
+    if astream is None:
+        response = await model.ainvoke(messages)
+        return _text_of(response), _usage_of(response)
+
+    parts: list[str] = []
+    usage: dict[str, int] = {}
+    async for chunk in astream(messages):
+        parts.append(_chunk_text(chunk))
+        chunk_usage = _usage_of(chunk)
+        if chunk_usage.get("prompt_tokens") or chunk_usage.get("completion_tokens"):
+            usage = chunk_usage
+    return "".join(parts).strip(), usage
+
+
 def _attempt(state: PipelineState, stage: str) -> int:
     return int((state.get("revisions") or {}).get(stage, 0)) + 1
 
@@ -63,10 +96,9 @@ async def _run_stage(
     started = _now_iso()
     model = get_chat_model(stage)
     system, user = prompt_builder(state)
-    response = await model.ainvoke(
-        [SystemMessage(content=system), HumanMessage(content=user)]
+    text, usage = await _call_model(
+        model, [SystemMessage(content=system), HumanMessage(content=user)]
     )
-    text = _text_of(response)
     finished = _now_iso()
 
     outcome: StageOutcome = {
@@ -74,7 +106,7 @@ async def _run_stage(
         "attempt": _attempt(state, stage),
         "started_at": started,
         "finished_at": finished,
-        "usage": _usage_of(response),
+        "usage": usage,
         "artifact": {
             "kind": kind,
             "content": text,

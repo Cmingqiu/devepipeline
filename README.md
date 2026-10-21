@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 / M2 完成**（需求管理 + LangGraph 4 阶段流水线 + 4 个人工审批门 + 运行详情审批界面）。M3（实时可观测性）、M4、M5 待做。
+当前进度：**M1 / M2 完成；M3 后端完成**（arq worker + Redis 事件总线 + SSE 实时流 + 增量 token）。M3 前端实时面板、M4、M5 待做。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -52,7 +52,12 @@ conda run -n devpipeline python main.py
 #   也支持环境变量：API_HOST / API_PORT / API_RELOAD / API_LOG_LEVEL
 #   等价入口：python -m app（两者共用 app/core/server.py，Windows selector 已在建 loop 前设置）
 
-# 3) 前端（另一个终端，127.0.0.1:5173，/api 已代理到 8000）
+# 3) arq worker（M3 起流水线在 worker 里跑；QUEUE_BACKEND=arq 时必须起）
+conda run -n devpipeline python worker.py
+#   为什么不用 `arq app.worker.main.WorkerSettings`：`python -m arq` 自建事件循环，
+#   Windows 上是 Proactor，psycopg 会直接报错；worker.py 先在建 loop 前钉死 selector。
+
+# 4) 前端（另一个终端，127.0.0.1:5173，/api 已代理到 8000）
 cd frontend
 pnpm install
 pnpm dev
@@ -109,15 +114,30 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - 接口：启动运行、运行列表/详情、`pending-approval`、`approval`、`states`（`aget_state_history`）、产物列表/正文/人工编辑、`retry`、`cancel`。
 - 一致性：读路径以 `aget_state` 为准校正 MariaDB；「审批已落库、resume 还没消费」的窗口里状态保持 `running` 且不再暴露待审批（防重复提交）；
   进程重启时按 checkpoint 把未完成的 run 重新挂上。
-- 队列：M2 用进程内 `asyncio` 队列（`app/queue/inline.py`），M3 换 arq + Redis，调用点只依赖 `submit()`。
+- 队列：`QUEUE_BACKEND=arq`（Redis + worker 进程）或 `inline`（进程内，零依赖）；调用方只依赖 `app/queue/dispatcher.py`。
 - 前端：`/runs` 列表（状态筛选/分页）、`/runs/:id`（4 阶段进度、待审批面板：通过/改后通过/驳回必填意见/中止、
   产物预览与人工编辑、checkpoint 状态历史、失败信息、3s 轮询）；需求详情的「启动流水线」已接通并按 `version_no` 起跑。
 - 需求状态跟随最新一次运行（`queued/running/waiting_approval/done/failed/cancelled`）：执行器在每次状态切换时同步，
   读接口 reconcile 也会自愈历史数据（只改 `latest_run_id` 指向当前 run 的那条需求）。
 
+## M3 已实现（后端）
+
+- 事件：`run_events`（迁移 `caaa494def20`）存 `{seq, ts, run_id, stage, type, payload}`；`seq` 用 Redis `INCR` 全局单调，
+  Redis 不可用时退化为「库里最大值 +1」并告警。
+- 实时：每次 emit 同时 `PUBLISH run:{id}:events`（实时）与批量落库（回放）；token 合并窗口 100 ms / 200 字符，
+  一次 LLM 调用产生几十条 `llm_token` 而不是几万条。
+- 流式前提：节点用 `model.astream()` 聚合，模型侧必须 `streaming=True`；非流式时 LangGraph 的 messages 模式只会吐一个整块。
+- SSE：`GET /api/v1/runs/{id}/stream`，支持 `Last-Event-ID` 回放 + Redis 实时订阅 + 15 s 心跳；
+  收到 `run_finished` 主动关闭；终态但缺终止事件时补一条再关。
+- 历史：`GET /api/v1/runs/{id}/events?after_seq=&page_size=&types=`。
+- 队列：`QUEUE_BACKEND=arq` 走 Redis 队列（worker 进程执行），Redis 不可用时自动回退进程内队列；
+  取消检查节流到 1 s/次（每 token 查一次远程 MariaDB 会把流式拖到 4 token/s）。
+- 踩坑修复：等审批时**不能**发 `run_finished`（否则前端会关掉流）；`interrupt` 才是暂停信号。
+
 ## 未实现（后续里程碑）
 
-- M3：arq worker、`astream_events` → Redis → SSE、Vue Flow 实时图、token/工具调用流式面板、暂停与回溯（`fork`）。
+- M3 前端：Vue Flow 实时图、token/工具调用流式面板、事件时间线（后端 SSE 已就绪）。
+- M3 剩余：暂停（worker 边界）、从任意 checkpoint `fork` 重跑。
 - M4：AGENTS.md / Skills / MCP 配置与注入。
 - M5：编码沙箱（git worktree / Docker）+ 白名单命令 + GitHub PR + 评审回退落代码。
 
@@ -127,6 +147,10 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 |---|---|
 | `uvicorn` 必须 `0.31.x` | 0.36+ 在 Windows 用 `asyncio.Runner(loop_factory=…)` 强制 ProactorEventLoop，psycopg 直接报 "cannot use the ProactorEventLoop" |
 | `redis` 必须 `<6` | arq 0.28 仍锁 `redis[hiredis]>=4.2,<6`，uv 解析 6.x 无解 |
+| worker 用 `python worker.py` 启动，不用 `-m arq` | `python -m arq` 自建事件循环（Windows=Proactor），psycopg 直接报 "cannot use the ProactorEventLoop" |
+| 节点调模型必须 `astream()` + `streaming=True` | 非流式时 LangGraph 的 messages 模式只吐一个整块，SSE 面板就没有增量 |
+| 取消检查必须节流 | 每 token 查一次远程 MariaDB 会把流式拖到 4 token/s（实测）；改为 1 s/次，节点边界必查 |
+| 等审批不发 `run_finished` | 该事件会让前端关掉 SSE；暂停语义用 `interrupt` |
 | `alembic.ini` 只能写 ASCII | configparser 用系统 locale（中文 Windows 是 GBK）读它，中文注释会 `UnicodeDecodeError` |
 | 不建外键、不声明 ORM relationship | 关系用显式查询表达；无外键时 ORM 猜不出 join 条件，且异步 lazy load 会炸 |
 | 集成测试用 savepoint 回滚 | 远程库没有独立测试库权限，直接清表会伤数据；但流水线用例必须真实提交（执行器用独立连接） |

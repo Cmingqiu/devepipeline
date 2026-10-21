@@ -48,6 +48,8 @@ def get_chat_model(stage: str) -> Any:
         temperature=settings.llm_temperature,
         timeout=settings.llm_timeout,
         max_retries=2,
-        streaming=False,
+        # 流式是 M3 实时面板的前提：非流式时 LangGraph 的 messages 模式只会吐一个整块
+        streaming=True,
+        stream_usage=True,
         tags=[f"stage:{stage}"],
     )

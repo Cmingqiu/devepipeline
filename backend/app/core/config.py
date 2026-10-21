@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_password: str = ""
     redis_db: int = 0
+    # inline（进程内，默认，单机开发零依赖） / arq（Redis 队列，M3 起的正式路径）
+    queue_backend: str = "inline"
 
     # LLM（M2 启用）
     llm_provider_name: str = "deepseek-v4-flash"

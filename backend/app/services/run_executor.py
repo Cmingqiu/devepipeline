@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,10 +24,14 @@ from app.db.base import utcnow
 from app.db.graph_db import get_checkpointer
 from app.db.session import get_session_factory
 from app.models import Artifact, PipelineRun, Requirement, RequirementVersion, StageRun
+from app.services.events import EventLogger
 
 logger = get_logger(__name__)
 
 _compiled_graph = None
+
+TOKEN_FLUSH_INTERVAL = 0.1  # 秒：token 合并窗口，避免每个字符一条事件
+TOKEN_FLUSH_CHARS = 200
 
 ERROR_MESSAGES: dict[str, str] = {
     "review_round_exceeded": "评审回退轮次超过上限，流水线终止，交人工处理",
@@ -46,6 +51,42 @@ REQUIREMENT_STATUS_MAP: dict[str, str] = {
 
 class RunCancelled(Exception):
     """协作式取消：执行器在每个 chunk 边界检查 DB 状态。"""
+
+
+class _TokenBatcher:
+    """把 LLM token 合并成 `llm_token` 事件；某节点第一次出 token 时补一条 `stage_started`。"""
+
+    def __init__(self, events: EventLogger) -> None:
+        self._events = events
+        self._buffers: dict[str, list[str]] = {}
+        self._last_flush: dict[str, float] = {}
+        self._started: set[str] = set()
+
+    async def add(self, stage: str | None, text: str) -> None:
+        if not stage or not text:
+            return
+        if stage not in self._started:
+            self._started.add(stage)
+            self._last_flush[stage] = time.monotonic()
+            await self._events.emit("stage_started", {"stage": stage}, stage=stage)
+        buffer = self._buffers.setdefault(stage, [])
+        buffer.append(text)
+        now = time.monotonic()
+        last = self._last_flush.get(stage, 0.0)
+        pending_chars = sum(len(part) for part in buffer)
+        if pending_chars >= TOKEN_FLUSH_CHARS or (now - last) >= TOKEN_FLUSH_INTERVAL:
+            await self.flush(stage)
+
+    async def flush(self, stage: str | None = None) -> None:
+        for key in [stage] if stage else list(self._buffers):
+            parts = self._buffers.pop(key, None)
+            if not parts:
+                continue
+            self._last_flush[key] = time.monotonic()
+            await self._events.emit("llm_token", {"text": "".join(parts)}, stage=key)
+
+    async def flush_all(self) -> None:
+        await self.flush()
 
 
 async def get_graph():
@@ -114,13 +155,27 @@ async def execute_run(
     *,
     resume_payload: dict[str, Any] | None = None,
     continue_run: bool = False,
+    event_logger: EventLogger | None = None,
 ) -> None:
     """执行一次（或恢复一次）流水线。异常一律转成 run.status=failed，不往外抛。"""
+    events = event_logger or EventLogger(run_id, publish=False)
+    try:
+        await _execute(run_id, resume_payload, continue_run, events)
+    finally:
+        await events.close()
+
+
+async def _execute(
+    run_id: int,
+    resume_payload: dict[str, Any] | None,
+    continue_run: bool,
+    events: EventLogger,
+) -> None:
     try:
         graph = await get_graph()
     except Exception as exc:
         logger.exception("checkpointer_unavailable")
-        await _fail(run_id, "checkpointer_unavailable", str(exc))
+        await _fail(run_id, "checkpointer_unavailable", str(exc), events)
         return
 
     session_factory = get_session_factory()
@@ -141,7 +196,7 @@ async def execute_run(
             try:
                 assert_provider_ready()
             except ProviderNotConfigured as exc:
-                await _fail(run_id, exc.code, exc.message)
+                await _fail(run_id, exc.code, exc.message, events)
                 return
             payload = await _initial_state(session, run)
 
@@ -150,39 +205,94 @@ async def execute_run(
         run.updated_at = utcnow()
         await sync_requirement_status(session, run, "running")
         await session.commit()
+        current_stage = run.current_stage
 
+    await events.emit(
+        "run_started",
+        {
+            "status": "running",
+            "resumed": bool(resume_payload) or continue_run,
+            "stage": current_stage,
+        },
+        stage=current_stage,
+    )
+
+    batcher = _TokenBatcher(events)
+    cancel_checked_at = 0.0
     try:
-        async for chunk in graph.astream(payload, config, stream_mode="updates"):
-            await _handle_chunk(run_id, graph, config, chunk)
+        async for mode, chunk in graph.astream(
+            payload, config, stream_mode=["updates", "messages"]
+        ):
+            # 取消检查要查远程 MariaDB：messages 模式下每 chunk 都查会拖垮流式速度，
+            # 所以节流到每 1 秒一次；updates（节点边界）永远检查。
+            now = time.monotonic()
+            if mode == "updates" or (now - cancel_checked_at) >= 1.0:
+                cancel_checked_at = now
+                if await _is_cancelled(run_id):
+                    raise RunCancelled
+            if mode == "messages":
+                await _handle_message(batcher, chunk)
+            else:
+                await _handle_chunk(run_id, graph, config, chunk, events, batcher)
     except RunCancelled:
+        await batcher.flush_all()
         logger.info("run_cancelled", extra={"run_id": run_id})
+        await events.emit("run_finished", {"status": "cancelled", "error_code": None}, stage=None)
         return
     except ProviderNotConfigured as exc:
-        await _fail(run_id, exc.code, exc.message)
+        await batcher.flush_all()
+        await _fail(run_id, exc.code, exc.message, events)
         return
     except Exception as exc:
         logger.exception("run_execution_failed", extra={"run_id": run_id})
-        await _fail(run_id, "internal", f"{type(exc).__name__}: {exc}")
+        await batcher.flush_all()
+        await _fail(run_id, "internal", f"{type(exc).__name__}: {exc}", events)
         return
 
-    await _finalize(run_id, graph, config)
+    await batcher.flush_all()
+    await _finalize(run_id, graph, config, events)
 
 
-async def _handle_chunk(run_id: int, graph, config: dict, chunk: dict[str, Any]) -> None:
-    if await _is_cancelled(run_id):
-        raise RunCancelled
+async def _handle_message(batcher: _TokenBatcher, chunk: Any) -> None:
+    """messages 模式的 chunk 形状是 (message_chunk, metadata)。"""
+    try:
+        message_chunk, metadata = chunk
+    except (TypeError, ValueError):
+        return
+    text = getattr(message_chunk, "content", "")
+    if not isinstance(text, str) or not text:
+        return
+    node = (metadata or {}).get("langgraph_node")
+    # 只认执行节点：gate_* 不产生 token
+    if not isinstance(node, str) or node.startswith("gate_"):
+        return
+    await batcher.add(node, text)
+
+
+async def _handle_chunk(
+    run_id: int,
+    graph,
+    config: dict,
+    chunk: dict[str, Any],
+    events: EventLogger,
+    batcher: _TokenBatcher,
+) -> None:
     if "__interrupt__" in chunk:
         interrupts = chunk["__interrupt__"]
         payload = getattr(interrupts[0], "value", None) if interrupts else None
-        await _mark_waiting(run_id, graph, config, payload or {})
+        await batcher.flush_all()
+        await _mark_waiting(run_id, graph, config, payload or {}, events)
         return
 
     for node, update in (chunk or {}).items():
         outcome = (update or {}).get("last_stage")
         if not outcome:
             continue
+        await batcher.flush(outcome.get("stage"))
         # gate 节点只在「改后通过」时产生产物：只落 artifact，不覆盖 stage_runs 的耗时与用量
-        await _persist_stage(run_id, outcome, stage_row=not node.startswith("gate_"))
+        await _persist_stage(
+            run_id, outcome, events, stage_row=not node.startswith("gate_")
+        )
 
 
 async def _is_cancelled(run_id: int) -> bool:
@@ -193,7 +303,9 @@ async def _is_cancelled(run_id: int) -> bool:
     return status == "cancelled"
 
 
-async def _persist_stage(run_id: int, outcome: dict[str, Any], *, stage_row: bool = True) -> None:
+async def _persist_stage(
+    run_id: int, outcome: dict[str, Any], events: EventLogger, *, stage_row: bool = True
+) -> None:
     stage = str(outcome.get("stage") or "")
     if not stage:
         return
@@ -201,7 +313,10 @@ async def _persist_stage(run_id: int, outcome: dict[str, Any], *, stage_row: boo
     usage = outcome.get("usage") or {}
     started = _parse_iso(outcome.get("started_at")) or utcnow()
     finished = _parse_iso(outcome.get("finished_at")) or utcnow()
+    duration_ms = max(0, int((finished - started).total_seconds() * 1000))
     settings = get_settings()
+    artifact_saved: dict[str, Any] | None = None
+    duration_for_event = duration_ms
 
     async with get_session_factory()() as session:
         if stage_row:
@@ -217,24 +332,32 @@ async def _persist_stage(run_id: int, outcome: dict[str, Any], *, stage_row: boo
             stage_run.model = settings.llm_model
             stage_run.prompt_tokens = usage.get("prompt_tokens")
             stage_run.completion_tokens = usage.get("completion_tokens")
-            stage_run.duration_ms = max(0, int((finished - started).total_seconds() * 1000))
+            stage_run.duration_ms = duration_ms
             stage_run.started_at = started
             stage_run.finished_at = finished
 
         artifact = outcome.get("artifact") or {}
         if artifact.get("content"):
             version = await _next_artifact_version(session, run_id, stage)
-            session.add(
-                Artifact(
-                    run_id=run_id,
-                    stage=stage,
-                    version=version,
-                    kind=str(artifact.get("kind") or "markdown"),
-                    content=str(artifact["content"]),
-                    summary=(str(artifact.get("summary") or ""))[:1024] or None,
-                    edited_by_human=bool(artifact.get("edited_by_human")),
-                )
+            row = Artifact(
+                run_id=run_id,
+                stage=stage,
+                version=version,
+                kind=str(artifact.get("kind") or "markdown"),
+                content=str(artifact["content"]),
+                summary=(str(artifact.get("summary") or ""))[:1024] or None,
+                edited_by_human=bool(artifact.get("edited_by_human")),
             )
+            session.add(row)
+            await session.flush()
+            artifact_saved = {
+                "artifact_id": row.id,
+                "stage": stage,
+                "version": version,
+                "kind": row.kind,
+                "summary": row.summary,
+                "edited_by_human": row.edited_by_human,
+            }
 
         run = await session.get(PipelineRun, run_id)
         if run is not None:
@@ -246,6 +369,25 @@ async def _persist_stage(run_id: int, outcome: dict[str, Any], *, stage_row: boo
             # 同一 run 理论上只有一个执行器；撞唯一键说明重复投递，丢弃即可
             await session.rollback()
             logger.warning("stage_persist_conflict", extra={"run_id": run_id, "stage": stage})
+            return
+
+    if stage_row:
+        await events.emit(
+            "usage",
+            {
+                "prompt_tokens": usage.get("prompt_tokens"),
+                "completion_tokens": usage.get("completion_tokens"),
+            },
+            stage=stage,
+        )
+    if artifact_saved:
+        await events.emit("artifact_saved", artifact_saved, stage=stage)
+    if stage_row:
+        await events.emit(
+            "stage_finished",
+            {"stage": stage, "attempt": attempt, "duration_ms": duration_for_event},
+            stage=stage,
+        )
 
 
 async def _next_artifact_version(session, run_id: int, stage: str) -> int:
@@ -254,7 +396,9 @@ async def _next_artifact_version(session, run_id: int, stage: str) -> int:
     return (max(versions) + 1) if versions else 1
 
 
-async def _mark_waiting(run_id: int, graph, config: dict, payload: dict[str, Any]) -> None:
+async def _mark_waiting(
+    run_id: int, graph, config: dict, payload: dict[str, Any], events: EventLogger
+) -> None:
     snapshot = await graph.aget_state(config)
     checkpoint_id = _checkpoint_id(snapshot)
     async with get_session_factory()() as session:
@@ -269,6 +413,17 @@ async def _mark_waiting(run_id: int, graph, config: dict, payload: dict[str, Any
         run.updated_at = utcnow()
         await sync_requirement_status(session, run, run.status)
         await session.commit()
+    await events.emit(
+        "interrupt",
+        {
+            "stage": payload.get("stage"),
+            "label": payload.get("label"),
+            "attempt": payload.get("attempt"),
+            "summary": payload.get("summary"),
+            "checkpoint_id": checkpoint_id,
+        },
+        stage=payload.get("stage"),
+    )
     logger.info("run_waiting_approval", extra={"run_id": run_id, "stage": payload.get("stage")})
 
 
@@ -279,10 +434,12 @@ def _checkpoint_id(snapshot: Any) -> str | None:
         return None
 
 
-async def _finalize(run_id: int, graph, config: dict) -> None:
+async def _finalize(run_id: int, graph, config: dict, events: EventLogger) -> None:
     snapshot = await graph.aget_state(config)
     values = snapshot.values or {}
     checkpoint_id = _checkpoint_id(snapshot)
+    status = "running"
+    error_code: str | None = None
 
     async with get_session_factory()() as session:
         run = await session.get(PipelineRun, run_id)
@@ -291,7 +448,7 @@ async def _finalize(run_id: int, graph, config: dict) -> None:
         if run.status == "cancelled":
             return
         run.last_checkpoint_id = checkpoint_id or run.last_checkpoint_id
-        error_code = str(values.get("error") or "")
+        error_code = str(values.get("error") or "") or None
         run.review_round = int(values.get("review_round") or run.review_round or 0)
 
         if getattr(snapshot, "interrupts", None):
@@ -309,10 +466,22 @@ async def _finalize(run_id: int, graph, config: dict) -> None:
             run.finished_at = utcnow()
         run.reconciled_at = utcnow()
         await sync_requirement_status(session, run, run.status)
+        status = run.status
         await session.commit()
 
+    if status == "waiting_approval":
+        # 等人工审批不是结束：只有 interrupt 事件，不发 run_finished（否则前端会关掉连接）
+        return
+    if status == "failed" and error_code:
+        await events.emit(
+            "error",
+            {"code": error_code, "message": ERROR_MESSAGES.get(error_code, error_code)},
+            stage=None,
+        )
+    await events.emit("run_finished", {"status": status, "error_code": error_code}, stage=None)
 
-async def _fail(run_id: int, code: str, message: str) -> None:
+
+async def _fail(run_id: int, code: str, message: str, events: EventLogger) -> None:
     async with get_session_factory()() as session:
         run = await session.get(PipelineRun, run_id)
         if run is None:
@@ -324,4 +493,6 @@ async def _fail(run_id: int, code: str, message: str) -> None:
         run.updated_at = utcnow()
         await sync_requirement_status(session, run, "failed")
         await session.commit()
+    await events.emit("error", {"code": code, "message": message[:2000]}, stage=None)
+    await events.emit("run_finished", {"status": "failed", "error_code": code}, stage=None)
 
