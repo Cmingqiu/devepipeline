@@ -16,7 +16,7 @@ from langgraph.types import Command
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.agents.graph import build_graph
+from app.agents.graph import NODE_TO_STAGE, build_graph
 from app.agents.llm import ProviderNotConfigured, assert_provider_ready
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -263,10 +263,11 @@ async def _handle_message(batcher: _TokenBatcher, chunk: Any) -> None:
     if not isinstance(text, str) or not text:
         return
     node = (metadata or {}).get("langgraph_node")
-    # 只认执行节点：gate_* 不产生 token
-    if not isinstance(node, str) or node.startswith("gate_"):
+    # metadata 里是 langgraph 节点名（analyze_requirement…），必须换成阶段枚举再发事件
+    stage = NODE_TO_STAGE.get(node) if isinstance(node, str) else None
+    if stage is None:
         return
-    await batcher.add(node, text)
+    await batcher.add(stage, text)
 
 
 async def _handle_chunk(

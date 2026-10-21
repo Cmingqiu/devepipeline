@@ -31,6 +31,13 @@ GATE_NODES: dict[str, Any] = {
     "review": gate_review,
 }
 
+# 节点名 → 阶段枚举。SSE 的 stage 字段必须是 analysis/design/coding/review，
+# 不能把 langgraph 的节点名（analyze_requirement 等）直接丢给前端。
+NODE_TO_STAGE: dict[str, str] = {
+    **{fn.__name__: stage for stage, fn in EXEC_NODES.items()},
+    **{fn.__name__: stage for stage, fn in GATE_NODES.items()},
+}
+
 
 def _decision(state: PipelineState, stage: str) -> str:
     return str(((state.get("gate_decisions") or {}).get(stage) or {}).get("decision") or "")

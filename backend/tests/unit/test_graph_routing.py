@@ -32,6 +32,18 @@ def test_exec_and_gate_nodes_cover_all_stages() -> None:
     assert set(GATE_NODES) == {"analysis", "design", "coding", "review"}
 
 
+def test_node_to_stage_mapping_uses_enum_not_node_names() -> None:
+    from app.agents.graph import NODE_TO_STAGE
+
+    assert NODE_TO_STAGE["analyze_requirement"] == "analysis"
+    assert NODE_TO_STAGE["design_system"] == "design"
+    assert NODE_TO_STAGE["coding"] == "coding"
+    assert NODE_TO_STAGE["pr_review"] == "review"
+    assert NODE_TO_STAGE["gate_analysis"] == "analysis"
+    assert set(NODE_TO_STAGE.values()) == {"analysis", "design", "coding", "review"}
+
+
+
 def test_approve_routes_forward() -> None:
     assert route_after_analysis(_state(**_decided("analysis", "approved"))) == "design_system"
     assert route_after_design(_state(**_decided("design", "approved"))) == "coding"
