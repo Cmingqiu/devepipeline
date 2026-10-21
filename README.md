@@ -112,6 +112,8 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - 队列：M2 用进程内 `asyncio` 队列（`app/queue/inline.py`），M3 换 arq + Redis，调用点只依赖 `submit()`。
 - 前端：`/runs` 列表（状态筛选/分页）、`/runs/:id`（4 阶段进度、待审批面板：通过/改后通过/驳回必填意见/中止、
   产物预览与人工编辑、checkpoint 状态历史、失败信息、3s 轮询）；需求详情的「启动流水线」已接通并按 `version_no` 起跑。
+- 需求状态跟随最新一次运行（`queued/running/waiting_approval/done/failed/cancelled`）：执行器在每次状态切换时同步，
+  读接口 reconcile 也会自愈历史数据（只改 `latest_run_id` 指向当前 run 的那条需求）。
 
 ## 未实现（后续里程碑）
 
