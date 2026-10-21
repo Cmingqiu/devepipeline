@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devpipeline-backend"
+version = "0.1.0"
+description = "DevPipeline backend: FastAPI + LangGraph 流水线 + MariaDB 业务库"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.135,<0.160",
+    # 上限卡 0.31.x：0.36+ 在 Windows 用 asyncio.Runner(loop_factory=...)
+    # 强制 ProactorEventLoop，psycopg 会报 "cannot use the ProactorEventLoop"
+    "uvicorn[standard]>=0.31,<0.32",
+    "pydantic>=2.11,<3",
+    "pydantic-settings>=2.6,<3",
+    "sqlalchemy[asyncio]>=2.1,<2.2",
+    "asyncmy>=0.2.16,<0.3",
+    "alembic>=1.20,<2",
+    "psycopg[binary,pool]>=3.3,<4",
+    "python-multipart>=0.0.20",
+    "httpx>=0.28,<1",
+    "cryptography>=44",
+    # 必须 <6：arq 0.28 仍硬依赖 redis[hiredis]>=4.2,<6（uv 实测解析失败）；
+    # redis-py 5.3 连 Redis 7.4 服务端正常
+    "redis>=5.2,<6",
+    "sse-starlette>=2,<3",
+    "arq>=0.28,<0.29",
+    "langgraph>=1.1.6,<2",
+    "langgraph-checkpoint-postgres>=3.1,<4",
+    "langchain-openai>=1.1,<2",
+    "langchain-mcp-adapters>=0.3.2,<0.4",
+    "PyGithub>=2.5,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "respx>=0.22",
+    "ruff>=0.9",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "maria: 需要真实 MariaDB（远程库，无 Docker 也能跑）",
+    "pg: 需要真实 PostgreSQL",
+]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
