@@ -1,0 +1,36 @@
+# 环境变量（含密码/密钥，一律不入库）
+.env
+.env.*
+!.env.example
+deploy/.env
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+htmlcov/
+.coverage
+
+# Node
+node_modules/
+dist/
+.vite/
+coverage/
+*.local
+
+# 运行时产物（技能包解压目录、沙箱工作区、日志）
+storage/
+workspaces/
+*.log
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
