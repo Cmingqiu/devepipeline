@@ -733,6 +733,248 @@ a {
   font-size: 12px;
 }
 
+/* ---------- 流水线图 / 实时面板 / 时间线 ---------- */
+
+.pipeline-graph {
+  height: 250px;
+  overflow: hidden;
+  background: #fbfcfe;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+}
+
+.pipeline-graph .vue-flow {
+  background: transparent;
+}
+
+.pipeline-node {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 132px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1.5px solid #dcdfe6;
+  border-radius: 10px;
+  box-shadow: var(--app-shadow-sm);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.pipeline-node:hover {
+  border-color: #93b8fb;
+  box-shadow: var(--app-shadow-md);
+}
+
+.pipeline-node__kind {
+  color: var(--app-text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.pipeline-node__label {
+  color: var(--app-text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.pipeline-node__status {
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.pipeline-node--pending {
+  opacity: 0.72;
+}
+
+.pipeline-node--done {
+  border-color: #67c23a;
+}
+
+.pipeline-node--done .pipeline-node__status {
+  color: #67c23a;
+}
+
+.pipeline-node--running {
+  border-color: #409eff;
+  box-shadow: 0 0 0 3px rgb(64 158 255 / 16%);
+}
+
+.pipeline-node--running .pipeline-node__status {
+  color: #409eff;
+}
+
+.pipeline-node--waiting {
+  background: #fffaf0;
+  border-color: #e6a23c;
+  box-shadow: 0 0 0 3px rgb(230 162 60 / 16%);
+}
+
+.pipeline-node--waiting .pipeline-node__status {
+  color: #e6a23c;
+}
+
+.pipeline-node--failed {
+  background: #fff5f5;
+  border-color: #f56c6c;
+}
+
+.pipeline-node--failed .pipeline-node__status {
+  color: #f56c6c;
+}
+
+.pipeline-current-stage {
+  margin: 10px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 13px;
+}
+
+.run-live-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.stream-panel,
+.timeline-panel {
+  min-height: 300px;
+}
+
+.stream-panel__stage {
+  color: var(--app-text-muted);
+  font-weight: 500;
+}
+
+.stream-panel__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.stream-output {
+  position: relative;
+  height: 320px;
+  padding: 12px 14px;
+  overflow: hidden;
+  background: #0f172a;
+  border-radius: 10px;
+}
+
+.stream-output__text {
+  height: 100%;
+  margin: 0;
+  overflow: auto;
+  color: #dbe6f5;
+  font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stream-output__empty {
+  margin: 0;
+  padding: 12px 0;
+  color: #7a8ba3;
+  font-size: 12px;
+}
+
+.stream-output__latest {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+}
+
+.timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 340px;
+  padding-right: 4px;
+  overflow: auto;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: 62px 76px 76px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: #fff;
+  border-left: 2px solid #dcdfe6;
+  border-radius: 4px;
+}
+
+.timeline-item__time {
+  color: var(--app-text-muted);
+}
+
+.timeline-item__type {
+  font-weight: 600;
+  color: var(--app-text-secondary);
+}
+
+.timeline-item__stage {
+  color: var(--app-text-muted);
+}
+
+.timeline-item__summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-item--warning {
+  border-left-color: #e6a23c;
+}
+
+.timeline-item--warning .timeline-item__type {
+  color: #e6a23c;
+}
+
+.timeline-item--danger {
+  border-left-color: #f56c6c;
+}
+
+.timeline-item--danger .timeline-item__type {
+  color: #f56c6c;
+}
+
+.timeline-item--success {
+  border-left-color: #67c23a;
+}
+
+.timeline-item--success .timeline-item__type {
+  color: #67c23a;
+}
+
+.timeline-item--info {
+  border-left-color: #409eff;
+}
+
+.timeline-item--info .timeline-item__type {
+  color: #409eff;
+}
+
+.timeline-item--default {
+  border-left-color: #dcdfe6;
+}
+
+@media (width <= 1100px) {
+  .run-live-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (width <= 960px) {
   .artifact-layout {
     grid-template-columns: 1fr;

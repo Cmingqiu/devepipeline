@@ -160,3 +160,24 @@ export interface Artifact {
 export interface ArtifactDetail extends Artifact {
   content: string
 }
+
+export type RunEventType =
+  | 'run_started'
+  | 'stage_started'
+  | 'llm_token'
+  | 'usage'
+  | 'artifact_saved'
+  | 'stage_finished'
+  | 'interrupt'
+  | 'decision'
+  | 'error'
+  | 'run_finished'
+
+/** 事件历史与 SSE 归并后的统一结构 */
+export interface RunEvent {
+  seq: number
+  ts: string
+  stage: string | null
+  type: RunEventType
+  payload: Record<string, unknown>
+}

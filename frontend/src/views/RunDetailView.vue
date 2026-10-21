@@ -5,19 +5,21 @@ import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
+import { listRunEvents } from '@/api/runs'
+import type { RunEvent, RunStage } from '@/api/types'
 import ApprovalPanel from '@/components/ApprovalPanel.vue'
 import ArtifactPanel from '@/components/ArtifactPanel.vue'
+import PipelineGraph from '@/components/PipelineGraph.vue'
 import RunStateHistory from '@/components/RunStateHistory.vue'
-import { useRunStore } from '@/stores/run'
+import RunStreamPanel from '@/components/RunStreamPanel.vue'
+import RunTimelinePanel from '@/components/RunTimelinePanel.vue'
+import { useRunStream } from '@/composables/useRunStream'
+import { SSE_FALLBACK_POLL_INTERVAL_MS, useRunStore } from '@/stores/run'
 import { formatDateTime, formatDuration } from '@/utils/datetime'
 import { getErrorMessage } from '@/utils/feedback'
+import { pendingStageOf } from '@/utils/pipeline'
 import { runStatusMeta } from '@/utils/status'
-import {
-  activeStageIndex,
-  buildStageSteps,
-  isActiveRunStatus,
-  stageLabel,
-} from '@/utils/stage'
+import { isActiveRunStatus, isRunStage, stageLabel } from '@/utils/stage'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,12 +28,54 @@ const store = useRunStore()
 const runId = computed(() => Number(route.params.runId))
 const refreshing = ref(false)
 
-const steps = computed(() =>
-  store.detail ? buildStageSteps(store.detail.status, store.detail.current_stage) : [],
+const {
+  status: streamStatus,
+  connected: streamConnected,
+  tokensByStage,
+  timeline: timelineEvents,
+  promptTokens: streamPromptTokens,
+  completionTokens: streamCompletionTokens,
+  currentStage: streamCurrentStage,
+  start: startStream,
+  stop: stopStream,
+  clear: clearStream,
+  seedTimeline,
+  setCurrentStage: setStreamStage,
+} = useRunStream(() => runId.value, {
+  onInterrupt: () => {
+    void refreshFromStream()
+  },
+  onDecision: () => {
+    void refreshFromStream()
+  },
+  onRunFinished: () => {
+    void refreshFromStream()
+  },
+  onArtifactSaved: () => {
+    void store.fetchArtifacts(runId.value).catch(() => undefined)
+  },
+})
+
+const liveStage = computed<RunStage | null>(() => {
+  const stage = streamCurrentStage.value
+  if (isRunStage(stage)) {
+    return stage
+  }
+  return store.detail?.current_stage ?? null
+})
+
+const pendingStage = computed<RunStage | null>(() =>
+  pendingStageOf(store.pendingApproval),
 )
-const stepActive = computed(() =>
-  store.detail ? activeStageIndex(store.detail.status, store.detail.current_stage) : 0,
-)
+
+const streamText = computed(() => {
+  const stage = liveStage.value
+  if (!stage) {
+    return ''
+  }
+  return tokensByStage.value[stage] ?? ''
+})
+
 const canCancel = computed(() =>
   store.detail ? isActiveRunStatus(store.detail.status) : false,
 )
@@ -50,13 +94,28 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopStream()
   store.stopPolling()
 })
 
 watch(runId, (next, previous) => {
   if (next !== previous) {
+    stopStream()
     store.stopPolling()
     load()
+  }
+})
+
+// SSE 断开 → 5s 轮询兜底；重连成功 → 停止轮询
+watch(streamStatus, (next) => {
+  const detail = store.detail
+  if (!detail || !isActiveRunStatus(detail.status)) {
+    return
+  }
+  if (next === 'error') {
+    store.startPolling(runId.value, SSE_FALLBACK_POLL_INTERVAL_MS)
+  } else if (next === 'open') {
+    store.stopPolling()
   }
 })
 
@@ -65,18 +124,60 @@ async function load(): Promise<void> {
     return
   }
 
+  stopStream()
+  clearStream()
   store.resetDetail()
   try {
     const detail = await store.fetchDetail(runId.value)
-    void store.fetchPendingApproval(runId.value).catch(() => undefined)
-    void store.fetchStates(runId.value).catch(() => undefined)
-    void store.fetchArtifacts(runId.value).catch(() => undefined)
+    setStreamStage(detail.current_stage)
+    await Promise.all([
+      store.fetchPendingApproval(runId.value).catch(() => undefined),
+      store.fetchStates(runId.value).catch(() => undefined),
+      store.fetchArtifacts(runId.value).catch(() => undefined),
+      seedHistory(),
+    ])
     if (isActiveRunStatus(detail.status)) {
-      store.startPolling(runId.value)
+      startStream()
     }
   } catch (err) {
     ElMessage.error(getErrorMessage(err, '加载运行详情失败'))
   }
+}
+
+/** 首屏时间线：按 after_seq 翻页拉历史（最多 10 页 / 2000 条）；失败不阻塞页面 */
+async function seedHistory(): Promise<void> {
+  const collected: RunEvent[] = []
+  let afterSeq = 0
+  try {
+    for (let page = 0; page < 10; page += 1) {
+      const events = await listRunEvents(runId.value, {
+        after_seq: afterSeq,
+        page_size: 200,
+      })
+      collected.push(...events)
+      if (events.length < 200) {
+        break
+      }
+      afterSeq = events[events.length - 1]?.seq ?? afterSeq
+    }
+  } catch {
+    // 历史接口失败时只展示实时事件
+  }
+  if (collected.length > 0) {
+    seedTimeline(collected)
+  }
+}
+
+async function refreshFromStream(): Promise<void> {
+  if (!store.detail) {
+    return
+  }
+  await store.fetchDetail(runId.value, { silent: true }).catch(() => undefined)
+  await Promise.all([
+    store.fetchPendingApproval(runId.value).catch(() => undefined),
+    store.fetchStates(runId.value).catch(() => undefined),
+    store.fetchArtifacts(runId.value).catch(() => undefined),
+  ])
 }
 
 async function refreshAll(): Promise<void> {
@@ -85,14 +186,13 @@ async function refreshAll(): Promise<void> {
   }
   refreshing.value = true
   try {
-    const detail = await store.fetchDetail(runId.value, { silent: true })
-    await Promise.all([
-      store.fetchPendingApproval(runId.value).catch(() => undefined),
-      store.fetchStates(runId.value).catch(() => undefined),
-      store.fetchArtifacts(runId.value).catch(() => undefined),
-    ])
-    if (isActiveRunStatus(detail.status) && !store.polling) {
-      store.startPolling(runId.value)
+    await refreshFromStream()
+    if (
+      store.detail &&
+      isActiveRunStatus(store.detail.status) &&
+      streamStatus.value !== 'open'
+    ) {
+      startStream()
     }
   } catch (err) {
     ElMessage.error(getErrorMessage(err, '刷新运行详情失败'))
@@ -102,9 +202,22 @@ async function refreshAll(): Promise<void> {
 }
 
 async function handleDecided(): Promise<void> {
-  await store.fetchArtifacts(runId.value).catch(() => undefined)
-  if (store.detail && isActiveRunStatus(store.detail.status) && !store.polling) {
-    store.startPolling(runId.value)
+  await refreshFromStream()
+}
+
+async function handleSelectStage(stage: RunStage): Promise<void> {
+  const candidates = store.artifacts.filter((artifact) => artifact.stage === stage)
+  if (candidates.length === 0) {
+    ElMessage.info(`${stageLabel(stage)}还没有产物`)
+    return
+  }
+  const latest = candidates.reduce((left, right) =>
+    right.version > left.version ? right : left,
+  )
+  try {
+    await store.loadArtifact(latest.id)
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '加载产物正文失败'))
   }
 }
 
@@ -123,8 +236,13 @@ async function cancelRun(): Promise<void> {
   try {
     await store.cancel(runId.value)
     ElMessage.success('已提交取消请求')
-    if (store.detail && isActiveRunStatus(store.detail.status) && !store.polling) {
-      store.startPolling(runId.value)
+    await refreshFromStream()
+    if (store.detail && isActiveRunStatus(store.detail.status)) {
+      if (streamStatus.value !== 'open') {
+        startStream()
+      }
+    } else {
+      stopStream()
     }
   } catch (err) {
     ElMessage.error(getErrorMessage(err, '取消运行失败'))
@@ -146,6 +264,8 @@ async function retryRun(): Promise<void> {
   try {
     await store.retry(runId.value)
     ElMessage.success('已提交重试请求')
+    store.stopPolling()
+    startStream()
   } catch (err) {
     ElMessage.error(getErrorMessage(err, '重试运行失败'))
   }
@@ -168,11 +288,12 @@ async function retryRun(): Promise<void> {
               <el-tag size="small" effect="plain" :type="runStatusMeta(store.detail.status).type">
                 {{ runStatusMeta(store.detail.status).label }}
               </el-tag>
-              <span>当前阶段 {{ stageLabel(store.detail.current_stage) }}</span>
+              <span>当前阶段 {{ stageLabel(liveStage) }}</span>
               <span>
                 评审轮次 {{ store.detail.review_round }} / {{ store.detail.max_review_rounds }}
               </span>
-              <span v-if="store.polling" class="run-polling">● 自动刷新中</span>
+              <span v-if="streamConnected" class="run-polling">● SSE 实时</span>
+              <span v-else-if="store.polling" class="run-polling">● 轮询兜底（5s）</span>
             </div>
           </div>
 
@@ -251,28 +372,36 @@ async function retryRun(): Promise<void> {
 
       <section class="surface">
         <header class="section-head">
-          <h2 class="section-title">阶段进度</h2>
+          <h2 class="section-title">流水线</h2>
           <span class="muted">
-            {{ store.polling ? '运行中每 3 秒自动刷新' : '状态来自后端字段，前端不做推断' }}
+            {{ streamConnected ? 'SSE 实时更新节点状态' : '节点状态来自后端字段' }}
           </span>
         </header>
 
-        <el-steps
-          :active="stepActive"
-          finish-status="success"
-          align-center
-          class="run-steps"
-        >
-          <el-step
-            v-for="step in steps"
-            :key="step.key"
-            :title="step.label"
-            :description="step.description"
-            :status="step.status === 'finish' ? 'success' : step.status"
-            :class="['run-step', step.tone ? `run-step--${step.tone}` : '']"
-          />
-        </el-steps>
+        <PipelineGraph
+          :status="store.detail.status"
+          :current-stage="liveStage"
+          :pending-stage="pendingStage"
+          @select-stage="handleSelectStage"
+        />
+
+        <p class="pipeline-current-stage">
+          当前阶段：<strong>{{ stageLabel(liveStage) }}</strong>
+          <span class="muted">· 点击节点查看该阶段产物</span>
+        </p>
       </section>
+
+      <div class="run-live-grid">
+        <RunStreamPanel
+          :stage="liveStage"
+          :text="streamText"
+          :connection="streamStatus"
+          :prompt-tokens="streamPromptTokens"
+          :completion-tokens="streamCompletionTokens"
+        />
+
+        <RunTimelinePanel :events="timelineEvents" :connected="streamConnected" />
+      </div>
 
       <ApprovalPanel
         v-if="store.pendingApproval"

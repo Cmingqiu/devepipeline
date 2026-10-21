@@ -6,6 +6,9 @@ import zhCn from 'element-plus/es/locale/lang/zh-cn'
 
 import 'element-plus/dist/index.css'
 import 'md-editor-v3/lib/style.css'
+import '@vue-flow/core/dist/style.css'
+import '@vue-flow/core/dist/theme-default.css'
+import '@vue-flow/controls/dist/style.css'
 import './styles/main.css'
 
 import App from './App.vue'

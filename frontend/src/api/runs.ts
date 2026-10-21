@@ -8,6 +8,7 @@ import type {
   PendingApproval,
   Run,
   RunDetail,
+  RunEvent,
   RunState,
   RunStatus,
 } from './types'
@@ -28,6 +29,21 @@ export interface RunCreatePayload {
 export interface ArtifactListParams {
   page?: number
   page_size?: number
+}
+
+export interface RunEventListParams {
+  after_seq?: number
+  page_size?: number
+  types?: string
+}
+
+export function listRunEvents(
+  runId: number,
+  params: RunEventListParams = {},
+): Promise<RunEvent[]> {
+  return http
+    .get<RunEvent[]>(`/runs/${runId}/events`, { params })
+    .then((response) => response.data)
 }
 
 export function listRuns(params: RunListParams = {}): Promise<Page<Run>> {

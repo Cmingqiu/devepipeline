@@ -19,6 +19,9 @@ import { isActiveRunStatus } from '@/utils/stage'
 
 export const RUN_POLL_INTERVAL_MS = 3000
 
+/** SSE 断开后的兜底轮询间隔 */
+export const SSE_FALLBACK_POLL_INTERVAL_MS = 5000
+
 export const useRunStore = defineStore('run', () => {
   const items = ref<Run[]>([])
   const total = ref(0)
@@ -49,6 +52,7 @@ export const useRunStore = defineStore('run', () => {
   const pollingPaused = ref(false)
   let pollTimer: ReturnType<typeof setTimeout> | null = null
   let pollRunId: number | null = null
+  let pollIntervalMs = RUN_POLL_INTERVAL_MS
 
   const isEmpty = computed(() => !loading.value && items.value.length === 0)
   const canPoll = computed(() =>
@@ -260,11 +264,12 @@ export const useRunStore = defineStore('run', () => {
         .finally(() => {
           schedulePoll()
         })
-    }, RUN_POLL_INTERVAL_MS)
+    }, pollIntervalMs)
   }
 
-  function startPolling(runId: number): void {
+  function startPolling(runId: number, intervalMs = RUN_POLL_INTERVAL_MS): void {
     pollRunId = runId
+    pollIntervalMs = intervalMs
     polling.value = true
     pollingPaused.value = false
     schedulePoll()

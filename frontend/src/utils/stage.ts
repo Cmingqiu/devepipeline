@@ -27,6 +27,15 @@ export function stageIndex(stage: RunStage | null | undefined): number {
   return PIPELINE_STAGES.findIndex((entry) => entry.key === stage)
 }
 
+export function isRunStage(value: string | null | undefined): value is RunStage {
+  return (
+    value === 'analysis' ||
+    value === 'design' ||
+    value === 'coding' ||
+    value === 'review'
+  )
+}
+
 export function stageLabel(stage: RunStage | string | null | undefined): string {
   if (!stage) {
     return '-'
