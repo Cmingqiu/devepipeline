@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 完成；M2 后端完成**（LangGraph 4 阶段 + 4 个审批门 + PostgreSQL checkpointer + `Command(resume)` 恢复）。M2 前端运行详情页与 M3 实时可观测性待做。
+当前进度：**M1 / M2 完成**（需求管理 + LangGraph 4 阶段流水线 + 4 个人工审批门 + 运行详情审批界面）。M3（实时可观测性）、M4、M5 待做。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -98,7 +98,7 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - 版本语义：每次保存或上传都追加一行版本并推进 `current_version_no`，追加时对需求行加 `FOR UPDATE`，并发不撞唯一键。
 - 前端：项目列表、需求列表（搜索/分页）、需求详情（Markdown 编辑 + 预览、保存新版本、上传 `.md`、版本历史抽屉）。
 
-## M2 已实现（后端）
+## M2 已实现
 
 - 图：`analyze_requirement → gate_analysis → design_system → gate_design → coding → gate_coding → pr_review → gate_review`，
   gate 内 `interrupt()`，恢复用 `Command(resume={decision, feedback?, edited_content?})`，同一 `thread_id`。
@@ -110,15 +110,14 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - 一致性：读路径以 `aget_state` 为准校正 MariaDB；「审批已落库、resume 还没消费」的窗口里状态保持 `running` 且不再暴露待审批（防重复提交）；
   进程重启时按 checkpoint 把未完成的 run 重新挂上。
 - 队列：M2 用进程内 `asyncio` 队列（`app/queue/inline.py`），M3 换 arq + Redis，调用点只依赖 `submit()`。
+- 前端：`/runs` 列表（状态筛选/分页）、`/runs/:id`（4 阶段进度、待审批面板：通过/改后通过/驳回必填意见/中止、
+  产物预览与人工编辑、checkpoint 状态历史、失败信息、3s 轮询）；需求详情的「启动流水线」已接通并按 `version_no` 起跑。
 
 ## 未实现（后续里程碑）
 
-- M2 前端：运行列表 / 运行详情的审批界面（阶段进度、产物查看、审批表单、状态历史）。
-- M3：arq worker、`astream_events` → Redis → SSE、Vue Flow 实时图、取消/暂停/重试/回溯（含暂停）。
+- M3：arq worker、`astream_events` → Redis → SSE、Vue Flow 实时图、token/工具调用流式面板、暂停与回溯（`fork`）。
 - M4：AGENTS.md / Skills / MCP 配置与注入。
 - M5：编码沙箱（git worktree / Docker）+ 白名单命令 + GitHub PR + 评审回退落代码。
-
-前端「启动流水线」按钮目前在 M1 页面里禁用；M2 前端的运行详情页会接通它。
 
 ## 已知约束（踩过的坑，别再踩）
 
