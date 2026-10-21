@@ -911,8 +911,8 @@ devpipeline/
 | `langchain-core` / `langchain-openai` | 与 langgraph 配套 | 模型调用 |
 | `langchain-mcp-adapters` | `>=0.3.2,<0.4` | MCP 工具（会拉 `langchain-core>=1.3.3`） |
 | `mcp` | 随 adapters | MCP 协议 |
-| `redis` | `>=6,<7` | 队列与 pub/sub |
-| `arq` | `>=0.26,<0.27` | worker |
+| `redis` | `>=5.2,<6` | 队列与 pub/sub。**不能装 6.x**：arq 0.28 仍锁 `redis[hiredis]>=4.2,<6`（uv 实测解析无解），redis-py 5.3 连 Redis 7.4 服务端正常 |
+| `arq` | `>=0.28,<0.29` | worker |
 | `sse-starlette` | `>=2,<3` | SSE（含 `Last-Event-ID` 处理与心跳） |
 | `cryptography` | `>=44` | Fernet 加密凭证 |
 | `python-multipart` | 随 FastAPI | 文件上传 |
