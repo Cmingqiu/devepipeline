@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Response, status
 from sqlalchemy import text
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.session import get_session_factory
 from app.schemas.common import OkBody
@@ -16,16 +17,54 @@ async def healthz() -> OkBody:
     return OkBody()
 
 
-@router.get("/readyz", summary="就绪探针：MariaDB 必查，PG/Redis 在 M2/M3 接入")
-async def readyz(response: Response) -> dict:
-    checks = {"mariadb": "ok", "postgres": "skipped", "redis": "skipped"}
-    try:
-        async with get_session_factory()() as session:
-            await session.execute(text("select 1"))
-    except Exception as exc:  # noqa: BLE001  探针必须把任何连接错误降级成 503，不能冒泡成 500
-        checks["mariadb"] = "failed"
-        logger.warning("readyz_mariadb_failed", extra={"error": str(exc)[:200]})
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "degraded", "checks": checks}
+async def _check_mariadb() -> None:
+    async with get_session_factory()() as session:
+        await session.execute(text("select 1"))
 
+
+async def _check_postgres() -> None:
+    import psycopg
+
+    conn = await psycopg.AsyncConnection.connect(
+        get_settings().postgres_dsn, connect_timeout=3
+    )
+    try:
+        async with conn.cursor() as cursor:
+            await cursor.execute("select 1")
+            await cursor.fetchone()
+    finally:
+        await conn.close()
+
+
+async def _check_redis() -> None:
+    from app.services.events import get_redis
+
+    client = await get_redis()
+    await client.ping()
+
+
+@router.get(
+    "/readyz",
+    summary="就绪探针：MariaDB / PostgreSQL（checkpointer）/ Redis（队列与事件）任一失败即 503",
+)
+async def readyz(response: Response) -> dict:
+    checks = {"mariadb": "ok", "postgres": "ok", "redis": "ok"}
+    for name, check in (
+        ("mariadb", _check_mariadb),
+        ("postgres", _check_postgres),
+        ("redis", _check_redis),
+    ):
+        try:
+            await check()
+        except Exception as exc:  # noqa: BLE001  探针必须把连接错误降级成 503，不能冒泡成 500
+            checks[name] = "failed"
+            logger.warning(
+                "readyz_dependency_failed",
+                extra={"dependency": name, "error": str(exc)[:200]},
+            )
+
+    failed = [name for name, value in checks.items() if value != "ok"]
+    if failed:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "degraded", "checks": checks, "failed": failed}
     return {"status": "ok", "checks": checks}
