@@ -105,7 +105,7 @@ flowchart LR
 
 - 写路径必须批量：`run_events` 每 200 ms 或每 50 条 flush 一次，绝不逐条 insert。
 - 禁止 N+1：列表接口一律 `selectinload` 或显式 join 计数。
-- `AsyncPostgresSaver(conn=pool, pipeline=True)`：checkpoint 的多次写合并成一个 pipeline，减少往返。
+- checkpointer 用 **psycopg 连接池**，不开 pipeline：`AsyncPostgresSaver.__init__` 对 `pool + pipe` 会直接 raise（源码强制检查），两者互斥。连接池换来断线重连与并发安全，代价是每次 checkpoint 多几次往返。
 - 读路径加短 TTL 缓存（项目配置、AGENTS.md、model_bindings），审批与运行状态**不缓存**。
 
 ### 1.4 实测环境基线（2026-10-21 验证）
@@ -246,7 +246,7 @@ sequenceDiagram
   API->>Q: enqueue run_pipeline(run_id)
   Q->>W: 取任务
   W->>G: astream_events({}, config{thread_id})
-  G->>PG: 每步 checkpoint（pipeline=True）
+  G->>PG: 每步 checkpoint（连接池）
   G-->>W: node/llm/tool 事件
   W->>DB: stage_runs + artifacts（幂等 upsert）
   W->>Q: publish run:id:events
@@ -907,7 +907,7 @@ devpipeline/
 | `alembic` | `>=1.20,<2` | 迁移 |
 | `psycopg[binary,pool]` | `>=3.3,<4` | PG 驱动（checkpointer 用） |
 | `langgraph` | `>=1.1.6,<2` | 编排（`interrupt`/`Command`/`aget_state_history` 已在本机 1.1.6 核对签名） |
-| `langgraph-checkpoint-postgres` | `>=3.1,<4` | `AsyncPostgresSaver`（`pipeline=True` 支持） |
+| `langgraph-checkpoint-postgres` | `>=3.1,<4` | `AsyncPostgresSaver`（用 psycopg 连接池；pipeline 模式与连接池互斥） |
 | `langchain-core` / `langchain-openai` | 与 langgraph 配套 | 模型调用 |
 | `langchain-mcp-adapters` | `>=0.3.2,<0.4` | MCP 工具（会拉 `langchain-core>=1.3.3`） |
 | `mcp` | 随 adapters | MCP 协议 |
@@ -964,7 +964,7 @@ cd frontend && pnpm build && pnpm test                 # 期望：构建成功�
 
 ### M2 LangGraph 流水线 + 人工审批（PG checkpointer）
 
-范围：`state.py`/`graph.py`/4 节点 + 4 gate、`AsyncPostgresSaver` 装配（`setup()` + `pipeline=True`）、run 启动与审批 API、`stage_runs`/`artifacts`/`stage_approvals` 落库、reconciler。
+范围：`state.py`/`graph.py`/4 节点 + 4 gate、`AsyncPostgresSaver` 装配（`setup()` + psycopg 连接池）、run 启动与审批 API、`stage_runs`/`artifacts`/`stage_approvals` 落库、reconciler。
 
 验收：
 ```bash
@@ -1033,7 +1033,7 @@ conda run -n devpipeline pytest tests/integration/test_github_pr.py -q   # respx
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 三库公网明文连接 | 凭证与数据在传输中可被嗅探 | 强密码 + 安全组白名单（或 SSH 隧道）；TLS 列为后续 |
-| VPS RTT 20–50 ms | 运行耗时偏高、事件落库变慢 | 批量写、禁 N+1、`pipeline=True`、配置短 TTL 缓存 |
+| VPS RTT 20–50 ms | 运行耗时偏高、事件落库变慢 | 批量写、禁 N+1、连接池复用、配置短 TTL 缓存 |
 | LangGraph 版本漂移（本机 1.1.6，PyPI 1.2.16） | 升级可能改签名/事件名 | 锁 `>=1.1.6,<2`，M2 开工前用已装环境再核对一次 |
 | 兼容端点不支持 `response_format` | 结构化解析失败 | JSON 代码块 + Pydantic 校验 + 一次重试，不依赖 `with_structured_output` |
 | 沙箱在 Windows 本机 | Docker 不可用，只有 worktree 模式可验 | 默认 worktree；Docker 模式代码写好，等有 Docker 的环境验证 |

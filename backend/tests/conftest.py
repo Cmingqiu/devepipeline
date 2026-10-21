@@ -17,6 +17,28 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
+@pytest.fixture(autouse=True)
+async def _close_global_resources():
+    """pytest-asyncio 每个用例一个新事件循环；全局连接池必须跟着关，否则下个用例复用会报
+    'Event loop is closed' / 'attached to a different loop'。"""
+    yield
+    from app.services import run_executor
+
+    try:
+        from app.db.graph_db import close_checkpointer
+
+        await close_checkpointer()
+    except Exception:  # noqa: BLE001, S110  清理是尽力而为，失败不影响用例结论
+        pass
+    run_executor.reset_graph()
+    try:
+        from app.db.session import dispose_engine
+
+        await dispose_engine()
+    except Exception:  # noqa: BLE001, S110  同上
+        pass
+
+
 @pytest.fixture(scope="session")
 def settings():
     return get_settings()

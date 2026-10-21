@@ -50,7 +50,26 @@ def create_app() -> FastAPI:
                 "mariadb": f"{settings.mariadb_host}:{settings.mariadb_port}/{settings.mariadb_database}",
             },
         )
+        # 启动兜底：进程内队列随重启丢失，按 checkpoint 把未完成的 run 重新挂上。
+        # 依赖不可用时只记日志，不能因此起不来（前端/单测都会用到这个 app）。
+        if settings.app_env != "test":
+            try:
+                from app.services.run_service import requeue_incomplete
+
+                requeued = await requeue_incomplete()
+                if requeued:
+                    logger.info("runs_requeued", extra={"count": requeued})
+            except Exception:
+                logger.exception("requeue_incomplete_failed")
+
         yield
+
+        try:
+            from app.db.graph_db import close_checkpointer
+
+            await close_checkpointer()
+        except Exception:  # noqa: BLE001
+            logger.warning("close_checkpointer_failed")
         await dispose_engine()
         logger.info("api_shutdown")
 

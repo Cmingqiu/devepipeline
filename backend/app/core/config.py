@@ -45,7 +45,10 @@ class Settings(BaseSettings):
     postgres_user: str = "devpipeline"
     postgres_password: str = ""
     postgres_db: str = "devpipeline_graph"
-    postgres_saver_pipeline: bool = True
+    # 连接池大小。注意：AsyncPostgresSaver 的 pipeline 模式只支持单个连接，
+    # 与连接池互斥（源码显式 raise），这里选连接池换取断线重连与并发安全。
+    postgres_pool_size: int = 5
+    postgres_connect_timeout: int = 10
 
     # Redis（arq 队列 + 事件广播，M3 启用）
     redis_host: str = "127.0.0.1"
@@ -58,6 +61,8 @@ class Settings(BaseSettings):
     llm_endpoint: str = "https://api.deepseek.com/chat/completions"
     llm_model: str = "deepseek-flash"
     llm_key_deepseek: str = ""
+    llm_temperature: float = 0.2
+    llm_timeout: float = 180.0
 
     @property
     def mariadb_url(self) -> str:
@@ -73,6 +78,14 @@ class Settings(BaseSettings):
     def redis_url(self) -> str:
         password = f":{quote(self.redis_password, safe='')}@" if self.redis_password else ""
         return f"redis://{password}{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def postgres_dsn(self) -> str:
+        password = quote(self.postgres_password, safe="")
+        return (
+            f"postgresql://{self.postgres_user}:{password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
 
     @property
     def cors_origin_list(self) -> list[str]:

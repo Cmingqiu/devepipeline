@@ -7,11 +7,9 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import app.models  # noqa: F401  导入全部模型，确保 Base.metadata 完整
 from app.core.config import get_settings
 from app.db.base import Base
-
-# 导入模型模块，确保 Base.metadata 里有表（autogenerate 依赖）
-from app.models import Project, Requirement, RequirementVersion  # noqa: F401
 
 config = context.config
 

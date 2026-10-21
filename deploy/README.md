@@ -108,8 +108,8 @@ POSTGRES_PORT=15432
 POSTGRES_USER=devpipeline
 POSTGRES_PASSWORD=<POSTGRES_PASSWORD>
 POSTGRES_DB=devpipeline_graph
-# 远程库建议开 pipeline 模式减少 checkpoint 往返延迟
-POSTGRES_SAVER_PIPELINE=true
+# checkpointer 用 psycopg 连接池（pipeline 模式与连接池互斥，不要开）
+
 
 # Redis（arq 队列 + 事件广播）
 REDIS_HOST=<vps-host>
