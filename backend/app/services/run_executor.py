@@ -22,7 +22,7 @@ from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.db.graph_db import get_checkpointer
 from app.db.session import get_session_factory
-from app.models import Artifact, PipelineRun, RequirementVersion, StageRun
+from app.models import Artifact, PipelineRun, Requirement, RequirementVersion, StageRun
 
 logger = get_logger(__name__)
 
@@ -31,6 +31,16 @@ _compiled_graph = None
 ERROR_MESSAGES: dict[str, str] = {
     "review_round_exceeded": "评审回退轮次超过上限，流水线终止，交人工处理",
     "aborted_by_human": "人工中止了本次运行",
+}
+
+# run.status -> requirement.status（前端需求列表/详情读的是 requirement.status）
+REQUIREMENT_STATUS_MAP: dict[str, str] = {
+    "queued": "queued",
+    "running": "running",
+    "waiting_approval": "waiting_approval",
+    "succeeded": "done",
+    "failed": "failed",
+    "cancelled": "cancelled",
 }
 
 
@@ -85,6 +95,20 @@ async def _initial_state(session, run: PipelineRun) -> dict[str, Any]:
     }
 
 
+async def sync_requirement_status(session, run: PipelineRun, run_status: str) -> None:
+    """把最新一次运行的状态同步回需求。
+
+    只同步「当前 latest_run_id 指向的那次运行」，避免旧 run 的收尾把新 run 的状态覆盖掉。
+    """
+    requirement = await session.get(Requirement, run.requirement_id)
+    if requirement is None or requirement.latest_run_id != run.id:
+        return
+    mapped = REQUIREMENT_STATUS_MAP.get(run_status)
+    if mapped and requirement.status != mapped:
+        requirement.status = mapped
+        requirement.updated_at = utcnow()
+
+
 async def execute_run(
     run_id: int,
     *,
@@ -124,6 +148,7 @@ async def execute_run(
         run.status = "running"
         run.started_at = run.started_at or utcnow()
         run.updated_at = utcnow()
+        await sync_requirement_status(session, run, "running")
         await session.commit()
 
     try:
@@ -242,6 +267,7 @@ async def _mark_waiting(run_id: int, graph, config: dict, payload: dict[str, Any
         # 图状态是权威：把回退轮次同步回业务库
         run.review_round = int((snapshot.values or {}).get("review_round") or 0)
         run.updated_at = utcnow()
+        await sync_requirement_status(session, run, run.status)
         await session.commit()
     logger.info("run_waiting_approval", extra={"run_id": run_id, "stage": payload.get("stage")})
 
@@ -282,6 +308,7 @@ async def _finalize(run_id: int, graph, config: dict) -> None:
             run.status = "succeeded"
             run.finished_at = utcnow()
         run.reconciled_at = utcnow()
+        await sync_requirement_status(session, run, run.status)
         await session.commit()
 
 
@@ -295,4 +322,6 @@ async def _fail(run_id: int, code: str, message: str) -> None:
         run.error_message = message[:2000]
         run.finished_at = utcnow()
         run.updated_at = utcnow()
+        await sync_requirement_status(session, run, "failed")
         await session.commit()
+

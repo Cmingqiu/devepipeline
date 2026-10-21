@@ -271,6 +271,10 @@ async def cancel_run(session: AsyncSession, run_id: int) -> PipelineRun:
     run.status = "cancelled"
     run.finished_at = utcnow()
     run.updated_at = utcnow()
+    requirement = await session.get(Requirement, run.requirement_id)
+    if requirement is not None and requirement.latest_run_id == run.id:
+        requirement.status = "cancelled"
+        requirement.updated_at = utcnow()
     await session.commit()
     return run
 
@@ -329,6 +333,10 @@ async def reconcile_run(session: AsyncSession, run: PipelineRun) -> PipelineRun:
 
     run.last_checkpoint_id = _checkpoint_id(snapshot) or run.last_checkpoint_id
     run.reconciled_at = utcnow()
+    # 老数据/异常退出后需求状态可能停在旧值，这里顺手对齐（只动 latest_run_id 指向本 run 的需求）
+    from app.services.run_executor import sync_requirement_status
+
+    await sync_requirement_status(session, run, run.status)
     await session.commit()
     return run
 

@@ -133,6 +133,41 @@ async def test_cancel_at_gate_blocks_further_approval(api, project_factory, fake
     assert approval.status_code == 409
 
 
+async def test_requirement_status_follows_latest_run(api, project_factory, fake_llm):
+    """前端需求列表/详情读的是 requirement.status，必须随最新一次运行推进。"""
+    _, requirement_id = await project_factory()
+
+    run_id = (
+        await api.post(f"/api/v1/requirements/{requirement_id}/runs", json={})
+    ).json()["id"]
+    await inline.join()
+
+    requirement = (await api.get(f"/api/v1/requirements/{requirement_id}")).json()
+    assert requirement["status"] == "waiting_approval"
+    assert requirement["latest_run_id"] == run_id
+
+    for _ in range(4):
+        approved = await api.post(f"/api/v1/runs/{run_id}/approval", json={"decision": "approved"})
+        assert approved.status_code == 202
+        await inline.join()
+
+    assert (await api.get(f"/api/v1/runs/{run_id}")).json()["status"] == "succeeded"
+    requirement = (await api.get(f"/api/v1/requirements/{requirement_id}")).json()
+    assert requirement["status"] == "done"
+
+
+async def test_requirement_status_cancelled_on_cancel(api, project_factory, fake_llm):
+    _, requirement_id = await project_factory()
+    run_id = (
+        await api.post(f"/api/v1/requirements/{requirement_id}/runs", json={})
+    ).json()["id"]
+    await inline.join()
+
+    assert (await api.post(f"/api/v1/runs/{run_id}/cancel")).status_code == 200
+    requirement = (await api.get(f"/api/v1/requirements/{requirement_id}")).json()
+    assert requirement["status"] == "cancelled"
+
+
 async def test_run_list_and_usage(api, project_factory, fake_llm):
     project_id, requirement_id = await project_factory(name="列表项目")
     created = await api.post(f"/api/v1/requirements/{requirement_id}/runs", json={})
