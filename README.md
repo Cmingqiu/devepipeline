@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 / M2 完成；M3 后端完成**（arq worker + Redis 事件总线 + SSE 实时流 + 增量 token）。M3 前端实时面板、M4、M5 待做。
+当前进度：**M1 / M2 / M3 完成**（需求管理 → 4 阶段流水线 + 人工审批 → arq worker + SSE 实时面板 + Vue Flow 流水线图）。M4 / M5 待做。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -132,11 +132,14 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - 历史：`GET /api/v1/runs/{id}/events?after_seq=&page_size=&types=`。
 - 队列：`QUEUE_BACKEND=arq` 走 Redis 队列（worker 进程执行），Redis 不可用时自动回退进程内队列；
   取消检查节流到 1 s/次（每 token 查一次远程 MariaDB 会把流式拖到 4 token/s）。
-- 踩坑修复：等审批时**不能**发 `run_finished`（否则前端会关掉流）；`interrupt` 才是暂停信号。
+- 踩坑修复：等审批时**不能**发 `run_finished`（否则前端会关掉流）；`interrupt` 才是暂停信号；
+  SSE 的 `stage` 必须是阶段枚举，不能透出 langgraph 节点名（否则前端 token 缓冲对不上，面板全空）。
+- 前端：`useRunStream` 订阅 10 种事件（token 按阶段拼接、时间线 2000 条上限、断线由浏览器重连带 `Last-Event-ID`）；
+  `PipelineGraph` 用 Vue Flow 画 8 个节点（4 阶段 + 4 审批门，五态配色）；运行详情用 SSE 替代轮询，
+  连接失败回退 5 s 轮询；实时流面板自动跟随、时间线着色。
 
 ## 未实现（后续里程碑）
 
-- M3 前端：Vue Flow 实时图、token/工具调用流式面板、事件时间线（后端 SSE 已就绪）。
 - M3 剩余：暂停（worker 边界）、从任意 checkpoint `fork` 重跑。
 - M4：AGENTS.md / Skills / MCP 配置与注入。
 - M5：编码沙箱（git worktree / Docker）+ 白名单命令 + GitHub PR + 评审回退落代码。
