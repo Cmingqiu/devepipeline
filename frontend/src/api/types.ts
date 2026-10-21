@@ -69,3 +69,94 @@ export interface RequirementVersion {
 export interface RequirementVersionDetail extends RequirementVersion {
   content: string
 }
+
+export type RunStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting_approval'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+
+export type RunStage = 'analysis' | 'design' | 'coding' | 'review'
+
+export type ArtifactKind = 'markdown' | 'diff'
+
+export type ApprovalDecision = 'approved' | 'approved_with_edit' | 'rejected' | 'aborted'
+
+export interface Run {
+  id: number
+  project_id: number
+  requirement_id: number
+  requirement_version_id: number
+  thread_id: string
+  status: RunStatus
+  current_stage: RunStage | null
+  review_round: number
+  max_review_rounds: number
+  error_code: string | null
+  error_message: string | null
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+  updated_at: string
+  prompt_tokens: number
+  completion_tokens: number
+}
+
+export interface PendingApproval {
+  stage: RunStage
+  label: string
+  attempt: number
+  summary: string
+  preview: string
+  artifact_id: number | null
+  checkpoint_id: string | null
+}
+
+/** 详情接口在 Run 之外附加 pending_approval（无待审批时可能是 null 或缺字段） */
+export interface RunDetail extends Run {
+  pending_approval?: PendingApproval | null
+}
+
+export interface ApprovalPayload {
+  decision: ApprovalDecision
+  feedback?: string
+  edited_content?: string
+}
+
+export interface ApprovalResult {
+  id: number
+  run_id: number
+  stage: RunStage
+  artifact_id: number | null
+  decision: ApprovalDecision
+  feedback: string | null
+  decided_by: string | null
+  decided_at: string
+}
+
+export interface RunState {
+  checkpoint_id: string
+  stage: string
+  next: string[]
+  created_at: string
+  has_interrupt: boolean
+  error: string | null
+}
+
+export interface Artifact {
+  id: number
+  run_id: number
+  stage: RunStage
+  version: number
+  kind: ArtifactKind
+  summary: string
+  edited_by_human: boolean
+  created_at: string
+}
+
+/** 单产物详情：含正文 */
+export interface ArtifactDetail extends Artifact {
+  content: string
+}

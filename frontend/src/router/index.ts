@@ -26,6 +26,18 @@ const router = createRouter({
       meta: { title: '需求详情' },
     },
     {
+      path: '/runs',
+      name: 'runs',
+      component: () => import('@/views/RunListView.vue'),
+      meta: { title: '运行' },
+    },
+    {
+      path: '/runs/:runId',
+      name: 'run-detail',
+      component: () => import('@/views/RunDetailView.vue'),
+      meta: { title: '运行详情' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       name: 'not-found',
       component: () => import('@/views/NotFoundView.vue'),

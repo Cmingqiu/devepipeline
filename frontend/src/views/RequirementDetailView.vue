@@ -3,13 +3,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'element-plus'
 import { MdEditor } from 'md-editor-v3'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { RouterLink, onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 
 import { getProject } from '@/api/projects'
+import { createRun } from '@/api/runs'
 import VersionHistoryDrawer from '@/components/VersionHistoryDrawer.vue'
 import { useRequirementStore } from '@/stores/requirement'
 import { formatDateTime } from '@/utils/datetime'
-import { getErrorMessage } from '@/utils/feedback'
+import { getErrorMessage, isConflict } from '@/utils/feedback'
 import { requirementStatusMeta } from '@/utils/status'
 
 const MAX_UPLOAD_SIZE = 2 * 1024 * 1024
@@ -32,6 +33,9 @@ const note = ref('')
 const drawerVisible = ref(false)
 const uploadRef = ref<UploadInstance>()
 const pendingFile = ref<File | null>(null)
+const startingRun = ref(false)
+/** 启动流水线跳转前已确认过未保存修改，避免离开守卫二次弹窗 */
+const leaveGuardBypassed = ref(false)
 
 const hasUnsavedChanges = computed(
   () => contentLoaded.value && editorContent.value !== baselineContent.value,
@@ -63,6 +67,7 @@ async function loadRequirement(): Promise<void> {
 
   store.resetDetail()
   contentLoaded.value = false
+  leaveGuardBypassed.value = false
   try {
     const data = await store.fetchDetail(requirementId.value)
     titleDraft.value = data.title
@@ -213,8 +218,44 @@ async function submitUpload(): Promise<void> {
   }
 }
 
+async function startPipeline(): Promise<void> {
+  const detail = store.detail
+  if (!detail) {
+    return
+  }
+
+  if (hasUnsavedChanges.value) {
+    const confirmed = await ElMessageBox.confirm(
+      `正文有未保存的修改，本次运行将使用已保存的 v${detail.current_version_no}。继续？`,
+      '未保存的修改',
+      { type: 'warning', confirmButtonText: '继续启动', cancelButtonText: '先保存' },
+    )
+      .then(() => true)
+      .catch(() => false)
+    if (!confirmed) {
+      return
+    }
+  }
+
+  startingRun.value = true
+  try {
+    const run = await createRun(detail.id, { version_no: detail.current_version_no })
+    leaveGuardBypassed.value = true
+    ElMessage.success(`已启动运行 #${run.id}`)
+    router.push({ name: 'run-detail', params: { runId: run.id } })
+  } catch (err) {
+    if (isConflict(err)) {
+      ElMessage.warning('该需求已有活跃运行，请先等待或取消')
+      return
+    }
+    ElMessage.error(getErrorMessage(err, '启动流水线失败'))
+  } finally {
+    startingRun.value = false
+  }
+}
+
 onBeforeRouteLeave(async () => {
-  if (!hasUnsavedChanges.value) {
+  if (leaveGuardBypassed.value || !hasUnsavedChanges.value) {
     return true
   }
 
@@ -258,11 +299,9 @@ onBeforeRouteLeave(async () => {
               保存标题
             </el-button>
             <el-button @click="openDrawer">版本历史</el-button>
-            <el-tooltip content="流水线将在 M2 开放" placement="top">
-              <span class="disabled-wrapper">
-                <el-button disabled>启动流水线</el-button>
-              </span>
-            </el-tooltip>
+            <el-button type="primary" :loading="startingRun" @click="startPipeline">
+              启动流水线
+            </el-button>
           </div>
         </div>
 
@@ -272,7 +311,12 @@ onBeforeRouteLeave(async () => {
           </el-tag>
           <span>当前版本 v{{ store.detail.current_version_no }}</span>
           <span>更新于 {{ formatDateTime(store.detail.updated_at) }}</span>
-          <span v-if="store.detail.latest_run_id">最近运行 #{{ store.detail.latest_run_id }}</span>
+          <RouterLink
+            v-if="store.detail.latest_run_id"
+            :to="{ name: 'run-detail', params: { runId: store.detail.latest_run_id } }"
+          >
+            最近运行 #{{ store.detail.latest_run_id }}
+          </RouterLink>
         </div>
       </section>
 

@@ -6,7 +6,14 @@ import { RouterLink, useRoute } from 'vue-router'
 const route = useRoute()
 
 const isProjectsActive = computed(
-  () => route.path === '/projects' || route.path.startsWith('/requirements') || route.path.startsWith('/projects'),
+  () =>
+    route.path === '/projects' ||
+    route.path.startsWith('/projects/') ||
+    route.path.startsWith('/requirements'),
+)
+
+const isRunsActive = computed(
+  () => route.path === '/runs' || route.path.startsWith('/runs/'),
 )
 </script>
 
@@ -23,9 +30,12 @@ const isProjectsActive = computed(
           <RouterLink class="app-nav__link" :class="{ 'is-active': isProjectsActive }" to="/projects">
             项目
           </RouterLink>
+          <RouterLink class="app-nav__link" :class="{ 'is-active': isRunsActive }" to="/runs">
+            运行
+          </RouterLink>
         </nav>
 
-        <el-tag class="app-phase" type="info" effect="plain" size="small">M1 · 需求管理</el-tag>
+        <el-tag class="app-phase" type="info" effect="plain" size="small">M2 · 流水线与审批</el-tag>
       </div>
     </header>
 

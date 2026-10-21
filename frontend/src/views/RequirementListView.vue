@@ -82,6 +82,16 @@ function openDetail(requirement: Requirement): void {
   })
 }
 
+function openRun(requirement: Requirement): void {
+  if (!requirement.latest_run_id) {
+    return
+  }
+  router.push({
+    name: 'run-detail',
+    params: { runId: requirement.latest_run_id },
+  })
+}
+
 async function handleDelete(requirement: Requirement): Promise<void> {
   const confirmed = await ElMessageBox.confirm(
     `删除后无法恢复，确定删除「${requirement.title}」？`,
@@ -175,9 +185,17 @@ async function handleDelete(requirement: Requirement): Promise<void> {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">查看</el-button>
+            <el-button
+              v-if="row.latest_run_id"
+              link
+              type="primary"
+              @click="openRun(row)"
+            >
+              查看运行
+            </el-button>
             <el-button
               link
               type="danger"
