@@ -96,17 +96,25 @@ services:
     networks:
       - devpipeline-net
 
+  # 运维面板：浏览/编辑 Redis key。管理界面暴露公网必须带 basic auth。
   redis-commander:
     image: rediscommander/redis-commander:latest
     restart: unless-stopped
     environment:
-      # 连接 redis 服务（容器内 6379，密码复用 .env 的 REDIS_PASSWORD）
-      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
+      TZ: UTC
+      # 格式 host:port:db:password（容器内用服务名直连）
+      REDIS_HOSTS: "local:redis:6379:0:${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}"
+      # 不设这两项 = 无鉴权，公网任何人可读写 Redis
+      HTTP_USER: ${REDIS_COMMANDER_USER:-admin}
+      HTTP_PASSWORD: ${REDIS_COMMANDER_PASSWORD:?请在 .env 中设置 REDIS_COMMANDER_PASSWORD}
     ports:
-      - "${REDIS_COMMANDER_HOST_PORT:-7741}:8081"
+      - "${BIND_ADDR:-0.0.0.0}:${REDIS_COMMANDER_HOST_PORT:-7741}:8081"
     depends_on:
-      - redis
-      
+      redis:
+        condition: service_healthy
+    networks:
+      - devpipeline-net
+
 volumes:
   mariadb-data:
   postgres-data:
