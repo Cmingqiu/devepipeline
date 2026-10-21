@@ -108,6 +108,21 @@ flowchart LR
 - `AsyncPostgresSaver(conn=pool, pipeline=True)`：checkpoint 的多次写合并成一个 pipeline，减少往返。
 - 读路径加短 TTL 缓存（项目配置、AGENTS.md、model_bindings），审批与运行状态**不缓存**。
 
+### 1.4 实测环境基线（2026-10-21 验证）
+
+用户 VPS（`111.229.49.43`）上由 `deploy/docker-compose.yml` 起的三库，已用真实客户端连通并核对：
+
+| 项 | 实测值 | 验证方式 |
+|---|---|---|
+| MariaDB | `11.4.13-MariaDB-ubu2404`；库 `devpipeline`，`utf8mb4` / `utf8mb4_unicode_ci` | `select version(), @@character_set_database, @@collation_database` |
+| 中文 + emoji | 插入 `中文😀` 回读正常，`char_length=3`、`length=10`（3+3+4 字节） | 建临时表插入后回读，表 collation 为 `utf8mb4_unicode_ci` |
+| PostgreSQL | `17.11`（alpine），库 `devpipeline_graph`，`UTF8`，`TimeZone=UTC` | `select version()` + `current_database()` |
+| Redis | `7.4.11`，`AUTH` 生效，`SET/GET` 中文😀 往返正常 | `PING` + 字符串往返 |
+| 端口 | 13306 / 15432 / 16379 / 7741 均从本机可达（RTT 14–34 ms） | TCP 探测 + 客户端连接 |
+| Redis Commander | 未带凭据访问返回 **200**（无鉴权） | `curl /`，见 §10.1 风险表 |
+
+结论：M1 可以直接连这套远程库跑 Alembic 与集成测试，不需要本机 Docker。
+
 ---
 
 ## 2. 技术选型与理由
@@ -1024,6 +1039,7 @@ conda run -n devpipeline pytest tests/integration/test_github_pr.py -q   # respx
 | 沙箱在 Windows 本机 | Docker 不可用，只有 worktree 模式可验 | 默认 worktree；Docker 模式代码写好，等有 Docker 的环境验证 |
 | 编码 Agent 执行命令 | 破坏本机/仓库 | 白名单命令 + 超时 + 输出截断 + 独立 worktree + 危险命令直接拒绝 |
 | 事件表膨胀 | `run_events` 增长快 | 唯一键 `(run_id, seq)`，M3 后加保留期清理任务 |
+| Redis Commander 面板无鉴权 | 公网任何人可浏览/改写 Redis（实测未带凭据访问返回 200） | compose 已强制 basic auth（`REDIS_COMMANDER_PASSWORD` 必填）；建议改绑 `127.0.0.1` 走 SSH 隧道，或 ufw 只放行自己 IP |
 
 ### 10.2 本期不做（明确排除）
 
@@ -1040,5 +1056,5 @@ conda run -n devpipeline pytest tests/integration/test_github_pr.py -q   # respx
 - 需求录入只支持 Markdown（编辑器 + `.md` 上传）；技能包只支持 zip（含 `SKILL.md`）。
 - 一次 run 冻结所有上下文；运行中改配置只影响下一次 run。
 - 沙箱默认 `git worktree`，Docker 模式为可选实现；两者产出同样的 diff 产物格式。
-- 本地端口：API 8000、前端 5173（dev）/ 80（生产）；VPS 端口：13306 / 15432 / 16379。
+- 本地端口：API 8000、前端 5173（dev）/ 80（生产）；VPS 端口：13306 / 15432 / 16379，Redis Commander 面板 7741（basic auth，仅运维用）。
 - 时区：DB 存 UTC，前端按浏览器时区展示。

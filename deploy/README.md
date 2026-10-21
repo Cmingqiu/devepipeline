@@ -1,6 +1,6 @@
 # VPS 基础设施启动指南
 
-三个容器：MariaDB 11.4（业务库）、PostgreSQL 17（LangGraph checkpointer）、Redis 7（队列 + 事件广播）。
+四个容器：MariaDB 11.4（业务库）、PostgreSQL 17（LangGraph checkpointer）、Redis 7（队列 + 事件广播）、Redis Commander（运维面板，宿主 7741）。
 本目录产物在 M1 之前即可独立运行，不依赖任何应用代码。
 
 ## 1. 前置条件
@@ -16,13 +16,13 @@
 cd deploy
 cp .env.example .env
 
-# 生成三个强密码并写进 .env（示例）
+# 生成强密码并写进 .env（示例；每个密码单独生成一次）
 openssl rand -base64 24 | tr -d '/+=' | cut -c1-24
 
-vi .env            # 修改 MARIADB_PASSWORD / MARIADB_ROOT_PASSWORD / POSTGRES_PASSWORD / REDIS_PASSWORD
+vi .env            # 改 MARIADB_PASSWORD / MARIADB_ROOT_PASSWORD / POSTGRES_PASSWORD / REDIS_PASSWORD / REDIS_COMMANDER_PASSWORD
 
 docker compose up -d
-docker compose ps  # 三个服务都应为 healthy
+docker compose ps  # 三库应为 healthy；redis-commander 为 Running（该镜像无健康检查）
 ```
 
 只启动基础设施（文件里将来追加 api/worker/frontend 后仍然适用）：
@@ -49,44 +49,50 @@ docker compose exec mariadb sh -c \
        insert into _charset_probe values (\"中文😀\");
        select v, char_length(v), length(v) from _charset_probe;
        drop table _charset_probe;"'
-# 期望 char_length=3（中文😀 三个字符）、length=9（utf8mb4 字节数）
+# 期望 char_length=3（中文😀 三个字符）、length=10（UTF-8 字节数 3+3+4）
 
 # 4) PostgreSQL：期望 version 17.x，库名 devpipeline_graph
 docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select version();"
 
 # 5) Redis：期望 PONG
 docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping'
+
+# 6) Redis Commander：不带凭据 401，带凭据 200
+curl -s -o /dev/null -w '%{http_code}\n' http://<host>:7741/
+curl -s -o /dev/null -w '%{http_code}\n' -u "$REDIS_COMMANDER_USER:$REDIS_COMMANDER_PASSWORD" http://<host>:7741/
 ```
 
 从你自己机器再验一次端口可达（把 host/port 换成实际值）：
 
 ```bash
-nc -vz <host> 13306 && nc -vz <host> 15432 && nc -vz <host> 16379
+nc -vz <host> 13306 && nc -vz <host> 15432 && nc -vz <host> 16379 && nc -vz <host> 7741
 ```
 
 ## 4. 暴露方式（二选一）
 
-### 方式 A：公网直连（默认，端口 13306/15432/16379）
+### 方式 A：公网直连（默认，端口 13306/15432/16379，面板 7741）
 
 - VPS 安全组 / ufw **只放行你自己的出口 IP**，不要 `0.0.0.0/0`：
   ```bash
   ufw allow from <你的出口IP> to any port 13306 proto tcp
   ufw allow from <你的出口IP> to any port 15432 proto tcp
   ufw allow from <你的出口IP> to any port 16379 proto tcp
+  ufw allow from <你的出口IP> to any port 7741 proto tcp
   ```
 - 已知风险：官方镜像不带 TLS，三个库都是**明文连接**。安全性依赖「强密码 + IP 白名单」。要 TLS 需另配证书与 `sslmode=require`，本期不做。
+- **Redis Commander 必须带 basic auth**：不设 `REDIS_COMMANDER_USER` / `REDIS_COMMANDER_PASSWORD` 时它没有任何鉴权，公网任何人都能浏览、改写 Redis（实测未设时直接返回 200）。面板只给自己看，建议改绑 `127.0.0.1` 走隧道，或至少 ufw 白名单 + 强密码。
 
 ### 方式 B：完全不对公网 + SSH 隧道（更安全）
 
 ```bash
 # .env 改成 BIND_ADDR=127.0.0.1 后 docker compose up -d
-ssh -N -L 13306:127.0.0.1:13306 -L 15432:127.0.0.1:15432 -L 16379:127.0.0.1:16379 <user>@<vps>
-# 之后本地一律连 127.0.0.1:13306 / 15432 / 16379
+ssh -N -L 13306:127.0.0.1:13306 -L 15432:127.0.0.1:15432 -L 16379:127.0.0.1:16379 -L 7741:127.0.0.1:7741 <user>@<vps>
+# 之后本地一律连 127.0.0.1:13306 / 15432 / 16379，面板走 http://127.0.0.1:7741
 ```
 
 ## 5. 回填到本地项目
 
-把实际值发给项目侧后，写入 `backend/.env`（M1 生成，Git 已忽略）。模板：
+`backend/.env` 已按下面的模板从 `deploy/.env` 派生生成（Git 已忽略，含真实密码与自动生成的 `APP_SECRET_KEY`）。换机器时照此模板重建：
 
 ```dotenv
 # MariaDB（业务库）
