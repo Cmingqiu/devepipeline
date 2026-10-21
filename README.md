@@ -47,9 +47,10 @@ cd backend
 conda run -n devpipeline python -m alembic upgrade head
 
 # 2) 后端 API（127.0.0.1:8000）
-conda run -n devpipeline python -m app
-# 等价的显式写法：python -m uvicorn app.main:app --port 8000
-# 不要用 --reload 之外的其它 loop 配置：Windows 必须是 selector 事件循环（见「已知约束」）
+conda run -n devpipeline python main.py
+#   换端口/开热重载：python main.py --port 8010 / python main.py --reload
+#   也支持环境变量：API_HOST / API_PORT / API_RELOAD / API_LOG_LEVEL
+#   等价入口：python -m app（两者共用 app/core/server.py，Windows selector 已在建 loop 前设置）
 
 # 3) 前端（另一个终端，127.0.0.1:5173，/api 已代理到 8000）
 cd frontend
@@ -115,4 +116,4 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | `alembic.ini` 只能写 ASCII | configparser 用系统 locale（中文 Windows 是 GBK）读它，中文注释会 `UnicodeDecodeError` |
 | 不建外键、不声明 ORM relationship | 关系用显式查询表达；无外键时 ORM 猜不出 join 条件，且异步 lazy load 会炸 |
 | 集成测试用 savepoint 回滚 | 远程库没有独立测试库权限，直接清表会伤数据 |
-| Windows 事件循环统一 selector | M2 的 psycopg 不支持 Proactor；`app/__main__.py` 在建 loop 前设置 |
+| Windows 事件循环统一 selector | M2 的 psycopg 不支持 Proactor；`backend/main.py` 入口在 uvicorn 建 loop 前设置（`app/core/server.py`） |
