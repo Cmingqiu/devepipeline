@@ -96,6 +96,17 @@ services:
     networks:
       - devpipeline-net
 
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    restart: unless-stopped
+    environment:
+      # 连接 redis 服务（容器内 6379，密码复用 .env 的 REDIS_PASSWORD）
+      REDIS_HOSTS: local:redis:6379:0:${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD}
+    ports:
+      - "${REDIS_COMMANDER_HOST_PORT:-7741}:8081"
+    depends_on:
+      - redis
+      
 volumes:
   mariadb-data:
   postgres-data:
