@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -33,7 +33,7 @@ def _snapshot_time(snapshot: Any) -> datetime | None:
         parsed = datetime.fromisoformat(str(raw))
     except ValueError:
         return None
-    return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+    return parsed.astimezone(UTC).replace(tzinfo=None) if parsed.tzinfo else parsed
 
 
 async def _interrupt_already_decided(
@@ -202,6 +202,8 @@ async def decide(
     run = await session.get(PipelineRun, run_id)
     if run is None:
         raise NotFoundError("运行不存在")
+    if run.status in {"succeeded", "failed", "cancelled"}:
+        raise ConflictError(f"运行已结束（{run.status}），不能再提交审批")
 
     pending = await pending_approval(session, run)
     if pending is None:

@@ -117,6 +117,22 @@ async def test_reconcile_does_not_flip_back_between_approve_and_resume(
     assert calls and calls[0][1]["resume_payload"] == {"decision": "approved"}
 
 
+async def test_cancel_at_gate_blocks_further_approval(api, project_factory, fake_llm):
+    _, requirement_id = await project_factory()
+    run_id = (await api.post(f"/api/v1/requirements/{requirement_id}/runs", json={})).json()["id"]
+    await inline.join()
+
+    cancelled = await api.post(f"/api/v1/runs/{run_id}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+    detail = (await api.get(f"/api/v1/runs/{run_id}")).json()
+    assert detail["status"] == "cancelled"  # reconcile 不能把结束态翻回来
+
+    approval = await api.post(f"/api/v1/runs/{run_id}/approval", json={"decision": "approved"})
+    assert approval.status_code == 409
+
+
 async def test_run_list_and_usage(api, project_factory, fake_llm):
     project_id, requirement_id = await project_factory(name="列表项目")
     created = await api.post(f"/api/v1/requirements/{requirement_id}/runs", json={})
