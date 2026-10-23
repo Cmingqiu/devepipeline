@@ -90,6 +90,25 @@ def coding_prompt(state: PipelineState) -> tuple[str, str]:
     return SYSTEM_BASE, user
 
 
+def coding_sandbox_prompt(state: PipelineState) -> tuple[str, str]:
+    user = f"""## 设计文档
+{state.get("design_doc", "")}
+{_context(state)}{_feedback(state)}
+你在一个**隔离的 git 工作区**里，可以直接改代码并跑测试。可用工具：
+- `sandbox_list_files` / `sandbox_read_file`：先了解仓库现状（不要盲改）
+- `sandbox_write_file`：写入完整文件内容（覆盖）
+- `sandbox_run_command`：执行白名单命令（pytest -q、pnpm test、ruff check 等）
+- `sandbox_git_diff`：查看当前改动
+
+工作流要求：
+1. 先看目录结构与关键文件；
+2. 按设计文档改代码；
+3. 跑测试/静态检查，失败就修，最多反复几轮；
+4. 最终回答写清楚：改了哪些文件、测试结果、遗留问题（不要贴大段 diff，执行器会用 git diff 收集）。
+"""
+    return SYSTEM_BASE, user
+
+
 def review_prompt(state: PipelineState) -> tuple[str, str]:
     user = f"""## 设计文档
 {state.get("design_doc", "")}

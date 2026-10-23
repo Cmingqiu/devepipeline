@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Query, Response, status
+from sqlalchemy import select
 
 from app.api.v1.deps import PaginationDep, SessionDep
+from app.models import CodeWorkspace
 from app.schemas.common import Page
 from app.schemas.run import (
     ApprovalIn,
@@ -15,6 +17,7 @@ from app.schemas.run import (
     RunDetail,
     RunOut,
     StateSummary,
+    WorkspaceOut,
 )
 from app.services import run_service
 
@@ -77,6 +80,27 @@ async def get_run(session: SessionDep, run_id: int) -> RunDetail:
     detail.completion_tokens = completion
     detail.pending_approval = PendingApproval(**pending) if pending else None
     return detail
+
+
+@router.get(
+    "/runs/{run_id}/workspaces",
+    response_model=list[WorkspaceOut],
+    summary="编码沙箱工作区（worktree 路径与分支）",
+)
+async def list_workspaces(session: SessionDep, run_id: int) -> list[WorkspaceOut]:
+    await run_service.get_run(session, run_id, reconcile=False)
+    rows = (
+        (
+            await session.execute(
+                select(CodeWorkspace)
+                .where(CodeWorkspace.run_id == run_id)
+                .order_by(CodeWorkspace.attempt)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [WorkspaceOut.model_validate(row) for row in rows]
 
 
 @router.get(

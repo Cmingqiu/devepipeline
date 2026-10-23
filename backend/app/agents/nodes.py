@@ -280,16 +280,33 @@ async def design_system(state: PipelineState) -> dict[str, Any]:
 
 
 async def coding(state: PipelineState) -> dict[str, Any]:
-    from app.agents.tool_registry import get_run_tools
+    from app.agents.tool_registry import get_run_sandbox, get_run_tools
 
-    return await _run_stage(
+    sandbox = get_run_sandbox(state.get("run_id"))
+    result = await _run_stage(
         state,
         stage="coding",
-        prompt_builder=prompts.coding_prompt,
+        prompt_builder=prompts.coding_sandbox_prompt if sandbox is not None else prompts.coding_prompt,
         doc_field="code_diff",
         kind="diff",
         tools=get_run_tools(state.get("run_id")),
     )
+
+    if sandbox is not None:
+        # 沙箱里真实改过文件：产物 = 模型说明 + git diff + 命令/测试记录
+        diff = await sandbox.diff()
+        log = sandbox.command_log_summary()
+        content = f"{result.get('code_diff') or ''}\n\n## 代码改动（git diff）\n{diff}"
+        if log:
+            content += f"\n\n## 命令与测试记录\n{log}"
+        result["code_diff"] = content
+        last_stage = dict(result.get("last_stage") or {})
+        artifact = dict(last_stage.get("artifact") or {})
+        artifact["content"] = content
+        artifact["summary"] = _summary(content)
+        last_stage["artifact"] = artifact
+        result["last_stage"] = last_stage
+    return result
 
 
 async def pr_review(state: PipelineState) -> dict[str, Any]:

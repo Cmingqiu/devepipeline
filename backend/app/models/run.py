@@ -112,3 +112,27 @@ class StageApproval(Base):
     feedback: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
     decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default="local")
     decided_at: Mapped[datetime] = mapped_column(DATETIME(fsp=3), nullable=False, default=utcnow)
+
+
+class CodeWorkspace(Base):
+    """编码沙箱工作区：每次 run 一个 clone + 独立分支，路径只在本机有效。"""
+
+    __tablename__ = "code_workspaces"
+    __table_args__ = (
+        UniqueConstraint("run_id", "attempt", name="uq_code_workspaces_run_attempt"),
+        {**MYSQL_TABLE_ARGS, "comment": "编码沙箱工作区"},
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(BIGINT(unsigned=True), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # worktree（默认） / docker（后续）
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="worktree")
+    repo_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    workspace_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    head_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    spec_json: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DATETIME(fsp=3), nullable=False, default=utcnow)
+    cleaned_at: Mapped[datetime | None] = mapped_column(DATETIME(fsp=3), nullable=True)

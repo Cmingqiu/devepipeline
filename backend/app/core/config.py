@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     # 编码阶段是否加载 MCP / 技能工具（关掉后等价于纯文本 coding）
     tools_enabled: bool = True
 
+    # 编码沙箱（M5）：git worktree 隔离目录；命令白名单与超时在 app/sandbox/commands.py
+    sandbox_enabled: bool = True
+    workspaces_dir: str = "workspaces"
+    sandbox_command_timeout: int = 120
+
     # LLM（M2 启用）
     llm_provider_name: str = "deepseek-v4-flash"
     llm_endpoint: str = "https://api.deepseek.com/chat/completions"

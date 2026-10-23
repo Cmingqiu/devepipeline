@@ -19,13 +19,13 @@ from sqlalchemy.exc import IntegrityError
 
 from app.agents.graph import NODE_TO_STAGE, build_graph
 from app.agents.llm import ProviderNotConfigured, assert_provider_ready
-from app.agents.tool_registry import clear_run_tools, set_run_tools
+from app.agents.tool_registry import clear_run_sandbox, clear_run_tools, set_run_tools
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.db.graph_db import get_checkpointer
 from app.db.session import get_session_factory
-from app.models import Artifact, PipelineRun, Requirement, RequirementVersion, StageRun
+from app.models import Artifact, CodeWorkspace, PipelineRun, Requirement, RequirementVersion, StageRun
 from app.services.events import EventLogger
 from app.services.prompt_context import load_prompt_context
 
@@ -210,9 +210,6 @@ async def _execute(
                 return
             payload = await _initial_state(session, run)
 
-        # 工具只在 worker 进程内注册（对象不可序列化，不能进 checkpoint）
-        project_id = run.project_id
-
         run.status = "running"
         run.started_at = run.started_at or utcnow()
         run.updated_at = utcnow()
@@ -233,7 +230,7 @@ async def _execute(
     batcher = _TokenBatcher(events)
     resolved_tools = tools
     if resolved_tools is None:
-        resolved_tools = await _load_tools(project_id, events)
+        resolved_tools = await _load_tools(run, events)
     if resolved_tools:
         set_run_tools(run_id, resolved_tools)
 
@@ -271,6 +268,7 @@ async def _execute(
         return
     finally:
         clear_run_tools(run_id)
+        clear_run_sandbox(run_id)
 
     await batcher.flush_all()
     await _finalize(run_id, graph, config, events)
@@ -279,45 +277,119 @@ async def _execute(
 TOOLS_LOAD_TIMEOUT = 25.0
 
 
-async def _load_tools(project_id: int, events: EventLogger) -> list[Any]:
-    """按项目配置加载工具；失败/超时降级为「无工具」，并把原因推进时间线。"""
+async def _load_tools(run: PipelineRun, events: EventLogger) -> list[Any]:
+    """加载 MCP / 技能工具，并在项目配了仓库时准备编码沙箱。失败一律降级不阻断。"""
+    from app.agents.sandbox_tools import build_sandbox_tools
+    from app.agents.tool_registry import set_run_sandbox
     from app.agents.tools import load_project_tools, tools_enabled
 
-    if not tools_enabled():
-        return []
-    try:
-        async with get_session_factory()() as session:
-            tools, diagnostics = await asyncio.wait_for(
-                load_project_tools(session, project_id), timeout=TOOLS_LOAD_TIMEOUT
-            )
-    except TimeoutError:
-        logger.warning("tools_load_timeout", extra={"project_id": project_id})
-        await events.emit(
-            "error",
-            {"code": "tools_load_timeout", "message": "工具加载超时，编码阶段将在无工具下运行"},
-            stage=None,
-        )
-        return []
-    except Exception as exc:
-        logger.exception("tools_load_failed", extra={"project_id": project_id})
-        await events.emit(
-            "error",
-            {"code": "tools_load_failed", "message": str(exc)[:500]},
-            stage=None,
-        )
-        return []
-
-    for item in diagnostics:
-        if not item.get("ok"):
+    tools: list[Any] = []
+    if tools_enabled():
+        try:
+            async with get_session_factory()() as session:
+                loaded, diagnostics = await asyncio.wait_for(
+                    load_project_tools(session, run.project_id), timeout=TOOLS_LOAD_TIMEOUT
+                )
+            tools.extend(loaded)
+            for item in diagnostics:
+                if not item.get("ok"):
+                    await events.emit(
+                        "error",
+                        {
+                            "code": "mcp_tool_unavailable",
+                            "message": f"{item.get('server')}: {item.get('error')}"[:500],
+                        },
+                        stage=None,
+                    )
+        except TimeoutError:
+            logger.warning("tools_load_timeout", extra={"project_id": run.project_id})
             await events.emit(
                 "error",
-                {
-                    "code": "mcp_tool_unavailable",
-                    "message": f"{item.get('server')}: {item.get('error')}"[:500],
-                },
+                {"code": "tools_load_timeout", "message": "工具加载超时，编码阶段将在无工具下运行"},
+                stage=None,
+            )
+        except Exception as exc:
+            logger.exception("tools_load_failed", extra={"project_id": run.project_id})
+            await events.emit(
+                "error",
+                {"code": "tools_load_failed", "message": str(exc)[:500]},
+                stage=None,
+            )
+
+    if get_settings().sandbox_enabled:
+        try:
+            workspace = await _prepare_sandbox(run)
+            if workspace is not None:
+                tools.extend(build_sandbox_tools(workspace))
+                set_run_sandbox(run.id, workspace)
+                await events.emit(
+                    "progress",
+                    {
+                        "message": f"编码沙箱就绪：{workspace.branch}",
+                        "workspace": str(workspace.root),
+                    },
+                    stage=None,
+                )
+        except Exception as exc:
+            logger.exception("sandbox_prepare_failed", extra={"run_id": run.id})
+            await events.emit(
+                "error",
+                {"code": "sandbox_unavailable", "message": str(exc)[:500]},
                 stage=None,
             )
     return tools
+
+
+async def _prepare_sandbox(run: PipelineRun):
+    """按项目仓库配置准备 worktree；没配仓库返回 None。"""
+    from app.core.security import decrypt_secret
+    from app.models import Credential, Project
+    from app.sandbox.worktree import prepare_workspace
+
+    async with get_session_factory()() as session:
+        project = await session.get(Project, run.project_id)
+        if project is None or not project.repo_url:
+            return None
+
+        token: str | None = None
+        if project.credential_id:
+            credential = await session.get(Credential, project.credential_id)
+            if credential is not None:
+                token = decrypt_secret(credential.encrypted_blob, credential.key_version)
+
+        branch = f"devpipeline/run-{run.id}"
+        workspace = await prepare_workspace(
+            run_id=run.id,
+            repo_url=project.repo_url,
+            base_branch=project.default_branch or "main",
+            branch=branch,
+            token=token,
+        )
+
+        row = (
+            await session.execute(
+                select(CodeWorkspace).where(
+                    CodeWorkspace.run_id == run.id, CodeWorkspace.attempt == 1
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = CodeWorkspace(
+                run_id=run.id,
+                attempt=1,
+                mode="worktree",
+                repo_url=project.repo_url,
+                workspace_path=str(workspace.root),
+                branch=branch,
+            )
+            session.add(row)
+        row.workspace_path = str(workspace.root)
+        row.branch = branch
+        row.base_sha = workspace.base_sha
+        row.head_sha = workspace.base_sha
+        row.repo_url = project.repo_url
+        await session.commit()
+        return workspace
 
 
 async def _handle_custom(events: EventLogger, chunk: Any) -> None:

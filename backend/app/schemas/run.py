@@ -111,3 +111,18 @@ class EventOut(BaseModel):
     stage: str | None = None
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+class WorkspaceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: int
+    attempt: int
+    mode: str
+    repo_url: str
+    workspace_path: str
+    branch: str
+    base_sha: str | None = None
+    head_sha: str | None = None
+    created_at: UtcDatetime
+    cleaned_at: UtcDatetime | None = None
