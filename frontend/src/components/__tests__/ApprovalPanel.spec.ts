@@ -1,7 +1,7 @@
 import { flushPromises, mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PendingApproval } from '@/api/types'
 
@@ -64,6 +64,12 @@ afterEach(() => {
     mountedWrappers.pop()?.unmount()
   }
   document.body.innerHTML = ''
+})
+
+afterAll(async () => {
+  // MdPreview 挂载时排的图片缩放 debounce（200ms）不会被卸载清理，
+  // 等它落地再销毁 jsdom，避免环境销毁后报 "document is not defined"
+  await new Promise((resolve) => setTimeout(resolve, 300))
 })
 
 describe('ApprovalPanel 审批表单校验', () => {

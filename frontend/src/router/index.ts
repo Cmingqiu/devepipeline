@@ -20,6 +20,12 @@ const router = createRouter({
       meta: { title: '需求' },
     },
     {
+      path: '/projects/:projectId/settings',
+      name: 'project-settings',
+      component: () => import('@/views/ProjectSettingsView.vue'),
+      meta: { title: '项目设置' },
+    },
+    {
       path: '/requirements/:requirementId',
       name: 'requirement-detail',
       component: () => import('@/views/RequirementDetailView.vue'),

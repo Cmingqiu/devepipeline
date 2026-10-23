@@ -101,6 +101,10 @@ async function handleDelete(project: Project): Promise<void> {
 function openRequirements(project: Project): void {
   router.push({ name: 'requirements', params: { projectId: project.id } })
 }
+
+function openSettings(project: Project): void {
+  router.push({ name: 'project-settings', params: { projectId: project.id } })
+}
 </script>
 
 <template>
@@ -151,6 +155,7 @@ function openRequirements(project: Project): void {
           <div class="project-card__footer">
             <el-button type="primary" link @click="openRequirements(project)">进入需求</el-button>
             <div class="page-actions">
+              <el-button link @click="openSettings(project)">设置</el-button>
               <el-button link @click="openEdit(project)">编辑</el-button>
               <el-button
                 v-if="project.status === 'active'"
