@@ -110,12 +110,15 @@ def coding_sandbox_prompt(state: PipelineState) -> tuple[str, str]:
 
 
 def review_prompt(state: PipelineState) -> tuple[str, str]:
+    pr_line = ""
+    if state.get("pull_request_url"):
+        pr_line = f"\n## 关联 PR\n{state.get('pull_request_url')}\n"
     user = f"""## 设计文档
 {state.get("design_doc", "")}
 
 ## 待评审的代码 Diff
 {state.get("code_diff", "")}
-{_context(state)}{_feedback(state)}
+{pr_line}{_context(state)}{_feedback(state)}
 请输出 PR 评审意见，Markdown，章节固定：
 ## 结论
 （通过 / 不通过，一句话）

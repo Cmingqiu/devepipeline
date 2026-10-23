@@ -63,6 +63,9 @@ class PipelineState(TypedDict, total=False):
     review_round: int
     max_review_rounds: int
     focus_feedback: str
+    # PR 交付（M5）：评审阶段创建/复用的 PR，失败时为空
+    pull_request_url: str
+    pull_request_number: int
     # 最近一次节点执行结果（执行器据此落 stage_runs / artifacts）
     last_stage: StageOutcome
     # 终端错误（驳回超轮次、人工中止等）

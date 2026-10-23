@@ -5,6 +5,9 @@
 
 编码节点例外：它从进程内注册表取执行器预先装好的工具（MCP / 技能读取），
 并通过 `get_stream_writer()` 把 tool_started / tool_finished 实时推给 SSE。
+
+评审节点例外：PR 创建需要落 `pull_requests` 表、推送远端分支，由 `pr_service`
+处理（失败降级为无 PR 评审），节点本身仍只返回 state 增量。
 """
 
 from __future__ import annotations
@@ -19,7 +22,10 @@ from langgraph.types import interrupt
 from app.agents import prompts
 from app.agents.llm import get_chat_model
 from app.agents.state import DECISIONS, PipelineState, StageOutcome
+from app.core.logging import get_logger
 from app.db.base import utcnow
+
+logger = get_logger(__name__)
 
 MAX_TOOL_ITERS = 6
 
@@ -310,13 +316,61 @@ async def coding(state: PipelineState) -> dict[str, Any]:
 
 
 async def pr_review(state: PipelineState) -> dict[str, Any]:
-    return await _run_stage(
+    pr_updates = await _ensure_pull_request(state)
+    result = await _run_stage(
         state,
         stage="review",
         prompt_builder=prompts.review_prompt,
         doc_field="review_report",
         kind="markdown",
     )
+    result.update(pr_updates)
+    return result
+
+
+async def _ensure_pull_request(state: PipelineState) -> dict[str, Any]:
+    """评审前把沙箱分支推上去并建 PR；失败只发事件，不阻断评审。"""
+    from app.agents.tool_registry import get_run_sandbox
+    from app.services.pr_service import ensure_pull_request
+    from app.vcs import VcsError
+
+    writer = _stream_writer()
+    run_id = int(state.get("run_id") or 0)
+    workspace = get_run_sandbox(run_id) if run_id else None
+    try:
+        outcome = await ensure_pull_request(run_id, workspace)
+    except VcsError as exc:
+        logger.warning("pr_unavailable", extra={"run_id": run_id, "error": str(exc)[:300]})
+        _emit(writer, "error", {"code": "pr_unavailable", "message": str(exc)[:500]}, "review")
+        return {}
+    except Exception as exc:  # PR 失败不能拖垮评审
+        logger.exception("pr_failed", extra={"run_id": run_id})
+        _emit(
+            writer,
+            "error",
+            {"code": "pr_unavailable", "message": f"{type(exc).__name__}: {exc}"[:500]},
+            "review",
+        )
+        return {}
+
+    if outcome is None:
+        return {}
+
+    info = outcome.info
+    _emit(
+        writer,
+        "pull_request_created",
+        {
+            "provider": info.provider,
+            "number": info.number,
+            "url": info.url,
+            "branch": info.branch,
+            "base_branch": info.base_branch,
+            "head_sha": info.head_sha,
+        },
+        "review",
+    )
+    return {"pull_request_url": info.url, "pull_request_number": info.number}
 
 
 def _gate(state: PipelineState, stage: str, doc_field: str, label: str) -> dict[str, Any]:

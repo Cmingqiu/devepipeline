@@ -126,3 +126,20 @@ class WorkspaceOut(BaseModel):
     head_sha: str | None = None
     created_at: UtcDatetime
     cleaned_at: UtcDatetime | None = None
+
+
+class PullRequestOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    run_id: int
+    provider: str
+    repo_full_name: str
+    number: int
+    url: str
+    branch: str
+    base_branch: str
+    head_sha: str | None = None
+    status: str
+    created_at: UtcDatetime
+    updated_at: UtcDatetime

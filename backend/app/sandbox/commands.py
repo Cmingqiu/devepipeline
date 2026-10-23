@@ -115,7 +115,9 @@ async def run_command(
     command: str,
     *,
     timeout: int = DEFAULT_TIMEOUT,
+    display_command: str | None = None,
 ) -> CommandResult:
+    """`display_command` 只影响记录/日志里的命令文本（用于藏掉带 token 的 URL）。"""
     argv = validate_command(command)
     timeout = max(1, min(timeout, MAX_TIMEOUT))
     started = time.monotonic()
@@ -153,7 +155,7 @@ async def run_command(
     out, cut_out = _decode(result.stdout or b"")
     err, cut_err = _decode(result.stderr or b"")
     return CommandResult(
-        command=command,
+        command=display_command or command,
         returncode=result.returncode,
         stdout=out,
         stderr=err,

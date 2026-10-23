@@ -6,13 +6,14 @@ from fastapi import APIRouter, Query, Response, status
 from sqlalchemy import select
 
 from app.api.v1.deps import PaginationDep, SessionDep
-from app.models import CodeWorkspace
+from app.models import CodeWorkspace, PullRequest
 from app.schemas.common import Page
 from app.schemas.run import (
     ApprovalIn,
     ApprovalOut,
     EventOut,
     PendingApproval,
+    PullRequestOut,
     RunCreate,
     RunDetail,
     RunOut,
@@ -101,6 +102,27 @@ async def list_workspaces(session: SessionDep, run_id: int) -> list[WorkspaceOut
         .all()
     )
     return [WorkspaceOut.model_validate(row) for row in rows]
+
+
+@router.get(
+    "/runs/{run_id}/pull-requests",
+    response_model=list[PullRequestOut],
+    summary="运行创建的 PR（provider/number/url/status）",
+)
+async def list_pull_requests(session: SessionDep, run_id: int) -> list[PullRequestOut]:
+    await run_service.get_run(session, run_id, reconcile=False)
+    rows = (
+        (
+            await session.execute(
+                select(PullRequest)
+                .where(PullRequest.run_id == run_id)
+                .order_by(PullRequest.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [PullRequestOut.model_validate(row) for row in rows]
 
 
 @router.get(

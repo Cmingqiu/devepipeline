@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     workspaces_dir: str = "workspaces"
     sandbox_command_timeout: int = 120
 
+    # GitHub PR（M5）：企业版改这里，测试用 respx 拦截同一个 base
+    github_api_base: str = "https://api.github.com"
+
     # LLM（M2 启用）
     llm_provider_name: str = "deepseek-v4-flash"
     llm_endpoint: str = "https://api.deepseek.com/chat/completions"

@@ -136,3 +136,29 @@ class CodeWorkspace(Base):
     spec_json: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME(fsp=3), nullable=False, default=utcnow)
     cleaned_at: Mapped[datetime | None] = mapped_column(DATETIME(fsp=3), nullable=True)
+
+
+class PullRequest(Base):
+    """PR 记录：一个 run 每个 provider 一条；评审驳回重跑时更新同一条。"""
+
+    __tablename__ = "pull_requests"
+    __table_args__ = (
+        UniqueConstraint("run_id", "provider", name="uq_pull_requests_run_provider"),
+        {**MYSQL_TABLE_ARGS, "comment": "Pull Request"},
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(BIGINT(unsigned=True), nullable=False)
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    repo_full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
+    branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    head_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # open / closed / merged
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DATETIME(fsp=3), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DATETIME(fsp=3), nullable=False, default=utcnow, onupdate=utcnow
+    )

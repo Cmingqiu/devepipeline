@@ -38,6 +38,13 @@ def _authenticated_url(repo_url: str, token: str | None) -> str:
     return f"{scheme}://x-access-token:{quote(token, safe='')}@{rest}"
 
 
+def _redact(text: str, token: str | None) -> str:
+    """git 报错会把带 token 的 URL 原样回显，落进产物/命令记录前必须替换掉。"""
+    if not token or not text:
+        return text
+    return text.replace(token, "***").replace(quote(token, safe=""), "***")
+
+
 @dataclass
 class Workspace:
     run_id: int
@@ -100,19 +107,52 @@ class Workspace:
             return "(没有改动)"
         return f"{result.stdout.strip()}\n\n{body.stdout}"
 
-    async def commit(self, message: str) -> str | None:
-        await self._git("add", "-A")
-        await self._git(
-            "-c", "user.name=devpipeline", "-c", "user.email=devpipeline@local",
-            "commit", "-m", message,
-        )
+    async def has_changes(self) -> bool:
+        result = await self._git("status", "--porcelain")
+        return bool(result.stdout.strip())
+
+    async def head(self) -> str | None:
         result = await self._git("rev-parse", "HEAD")
         return result.stdout.strip() or None
 
-    async def push(self, token: str | None = None) -> bool:
+    async def commit(self, message: str) -> str | None:
+        """提交全部改动并返回新 HEAD；没有可提交内容时返回 None。
+
+        commit message 带空格/中文，必须走 argv 直传：`run_command` 会做 shlex 拆分，
+        未加引号的 message 会被拆成多条 pathspec（实测 git 报 pathspec did not match）。
+        """
+        await self._git("add", "-A")
+        commit = await _run_git(
+            [
+                "git",
+                "-c",
+                "user.name=devpipeline",
+                "-c",
+                "user.email=devpipeline@local",
+                "commit",
+                "-m",
+                message,
+            ],
+            cwd=self.root,
+        )
+        if not commit.ok:
+            return None
+        result = await self._git("rev-parse", "HEAD")
+        return result.stdout.strip() or None
+
+    async def push(self, token: str | None = None) -> CommandResult:
+        """推送当前分支；命令行里带 token，所以记录与输出都要脱敏。"""
         url = _authenticated_url(self.repo_url, token)
-        result = await run_command(self.root, f"git push {url} {self.branch}:{self.branch}")
-        return result.ok
+        result = await run_command(
+            self.root,
+            f"git push {url} {self.branch}:{self.branch}",
+            timeout=180,
+            display_command=f"git push origin {self.branch}",
+        )
+        result.stdout = _redact(result.stdout, token)
+        result.stderr = _redact(result.stderr, token)
+        self.command_log.append(result)
+        return result
 
     async def _git(self, *args: str) -> CommandResult:
         result = await run_command(self.root, " ".join(["git", *args]))

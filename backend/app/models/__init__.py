@@ -2,7 +2,14 @@ from app.models.context import AgentDoc, Credential, McpConfig, Skill, SkillFile
 from app.models.event import RunEvent
 from app.models.project import Project
 from app.models.requirement import Requirement, RequirementVersion
-from app.models.run import Artifact, CodeWorkspace, PipelineRun, StageApproval, StageRun
+from app.models.run import (
+    Artifact,
+    CodeWorkspace,
+    PipelineRun,
+    PullRequest,
+    StageApproval,
+    StageRun,
+)
 
 __all__ = [
     "AgentDoc",
@@ -12,6 +19,7 @@ __all__ = [
     "McpConfig",
     "PipelineRun",
     "Project",
+    "PullRequest",
     "Requirement",
     "RequirementVersion",
     "RunEvent",

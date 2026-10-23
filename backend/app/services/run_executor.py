@@ -385,19 +385,23 @@ async def _prepare_sandbox(run: PipelineRun):
             session.add(row)
         row.workspace_path = str(workspace.root)
         row.branch = branch
-        row.base_sha = workspace.base_sha
-        row.head_sha = workspace.base_sha
+        # 复用目录时 base_sha 为空（clone 阶段才有）：别把已有的 base/head 覆盖成空
+        row.base_sha = workspace.base_sha or row.base_sha
+        row.head_sha = await workspace.head() or row.head_sha
         row.repo_url = project.repo_url
         await session.commit()
         return workspace
 
 
 async def _handle_custom(events: EventLogger, chunk: Any) -> None:
-    """节点用 get_stream_writer() 推来的自定义事件（目前是 tool_started / tool_finished）。"""
+    """节点用 get_stream_writer() 推来的自定义事件。
+
+    目前有工具调用、PR 交付，以及节点内的降级 error（如 pr_unavailable）。
+    """
     if not isinstance(chunk, dict):
         return
     event_type = str(chunk.get("type") or "")
-    if event_type not in {"tool_started", "tool_finished"}:
+    if event_type not in {"tool_started", "tool_finished", "pull_request_created", "error"}:
         return
     payload = chunk.get("payload") or {}
     stage = chunk.get("stage")
