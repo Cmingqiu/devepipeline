@@ -69,9 +69,10 @@ async def test_decision_event_recorded(project_factory, fake_llm):
 
     types = [event[1] for event in await _events(run_id)]
     assert "decision" in types
-    # 审批后应继续跑出 design 阶段
-    assert "interrupt" in types
-    assert types[-1] == "interrupt"
+    # 审批后应继续跑出 design 阶段并停在下一个审批门
+    # （用 count 而不是「最后一条」，避免事件落盘时序导致的偶发）
+    assert types.count("interrupt") >= 1
+    assert "run_finished" not in types
 
 
 async def test_sse_replays_history_then_closes(project_factory, fake_llm):

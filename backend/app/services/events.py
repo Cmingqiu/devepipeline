@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -162,16 +163,25 @@ class EventLogger:
             async with get_session_factory()() as session:
                 session.add_all(batch)
                 await session.commit()
+        except asyncio.CancelledError:
+            # 关键：关闭时取消在途 flush 不能让这批事件凭空消失（实测会丢 interrupt）
+            self._buffer = batch + self._buffer
+            raise
         except Exception:
             logger.exception(
                 "event_persist_failed", extra={"run_id": self.run_id, "count": len(batch)}
             )
+            self._buffer = batch + self._buffer
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         if self._flush_task is not None:
-            self._flush_task.cancel()
+            task = self._flush_task
             self._flush_task = None
+            task.cancel()
+            # 等它把批次放回 buffer（CancelledError 分支），再统一落库
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         await self.flush()

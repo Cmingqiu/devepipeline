@@ -85,6 +85,16 @@ async def project_factory():
 
     for project_id, _ in created:
         await _cleanup_project(project_id)
+        try:
+            import shutil
+
+            from app.services.storage import storage_root
+
+            target = storage_root() / "skills" / str(project_id)
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+        except Exception:  # noqa: BLE001, S110  清理失败不影响测试结论
+            pass
 
 
 @pytest.fixture
@@ -116,3 +126,31 @@ def fake_llm(monkeypatch):
         "app.agents.nodes.get_chat_model", lambda stage: _FakeModel(stage), raising=True
     )
     return calls
+
+
+@pytest.fixture
+def captured_llm(monkeypatch):
+    """同 fake_llm，但额外记录每个阶段收到的完整 prompt（用于断言 AGENTS.md / 技能注入）。"""
+    from langchain_core.messages import AIMessage
+
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "llm_key_deepseek", "sk-test", raising=False)
+    captured: list[tuple[str, str]] = []
+
+    class _FakeModel:
+        def __init__(self, stage: str) -> None:
+            self.stage = stage
+
+        async def ainvoke(self, messages):
+            text = "\n".join(str(getattr(message, "content", "")) for message in messages)
+            captured.append((self.stage, text))
+            return AIMessage(
+                content=f"# {self.stage} 产物\n",
+                usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+
+    monkeypatch.setattr(
+        "app.agents.nodes.get_chat_model", lambda stage: _FakeModel(stage), raising=True
+    )
+    return captured

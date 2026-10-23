@@ -51,6 +51,7 @@ class PipelineState(TypedDict, total=False):
     # 输入快照（一次 run 冻结）
     raw_requirement: str
     agents_md: str
+    skill_index: list[dict[str, str]]
     # 各阶段产物
     analysis_doc: str
     design_doc: str

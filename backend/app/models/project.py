@@ -29,6 +29,13 @@ class Project(Base):
     # 本期恒为 NULL，为多用户预留
     owner_id: Mapped[int | None] = mapped_column(BIGINT(unsigned=True), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    # 目标代码仓库（M4 配置，M5 编码阶段使用）
+    repo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    repo_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    default_branch: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="main", server_default="main"
+    )
+    credential_id: Mapped[int | None] = mapped_column(BIGINT(unsigned=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME(fsp=3), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DATETIME(fsp=3), nullable=False, default=utcnow, onupdate=utcnow

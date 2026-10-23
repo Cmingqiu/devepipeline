@@ -17,10 +17,24 @@ SYSTEM_BASE = """你是一名资深全栈架构师，正在参与一条受人工
 
 
 def _context(state: PipelineState) -> str:
+    parts: list[str] = []
     agents_md = (state.get("agents_md") or "").strip()
-    if not agents_md:
-        return ""
-    return f"\n## 项目规范（AGENTS.md，必须遵守）\n{agents_md}\n"
+    if agents_md:
+        parts.append(f"\n## 项目规范（AGENTS.md，必须遵守）\n{agents_md}\n")
+
+    skills = state.get("skill_index") or []
+    if skills:
+        blocks = []
+        for skill in skills:
+            name = str(skill.get("name") or "")
+            description = str(skill.get("description") or "")
+            entry = str(skill.get("entry") or "").strip()
+            block = f"### {name}\n{description}"
+            if entry:
+                block += f"\n\n{entry}"
+            blocks.append(block)
+        parts.append("\n## 可用技能（命中场景时按其中的步骤执行）\n" + "\n\n".join(blocks) + "\n")
+    return "".join(parts)
 
 
 def _feedback(state: PipelineState) -> str:

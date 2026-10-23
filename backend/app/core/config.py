@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     # inline（进程内，默认，单机开发零依赖） / arq（Redis 队列，M3 起的正式路径）
     queue_backend: str = "inline"
 
+    # 技能包等文件落盘目录（相对 backend/）
+    storage_dir: str = "storage"
+    skill_zip_max_mb: int = 20
+    skill_extract_max_mb: int = 50
+    skill_files_max: int = 200
+
     # LLM（M2 启用）
     llm_provider_name: str = "deepseek-v4-flash"
     llm_endpoint: str = "https://api.deepseek.com/chat/completions"

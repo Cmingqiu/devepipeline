@@ -25,6 +25,7 @@ from app.db.graph_db import get_checkpointer
 from app.db.session import get_session_factory
 from app.models import Artifact, PipelineRun, Requirement, RequirementVersion, StageRun
 from app.services.events import EventLogger
+from app.services.prompt_context import load_prompt_context
 
 logger = get_logger(__name__)
 
@@ -121,13 +122,15 @@ def _parse_iso(value: str | None) -> datetime | None:
 
 async def _initial_state(session, run: PipelineRun) -> dict[str, Any]:
     version = await session.get(RequirementVersion, run.requirement_version_id)
+    prompt_context = await load_prompt_context(session, run.project_id)
     return {
         "run_id": run.id,
         "project_id": run.project_id,
         "requirement_id": run.requirement_id,
         "requirement_version_id": run.requirement_version_id,
         "raw_requirement": version.content if version else "",
-        "agents_md": "",
+        "agents_md": prompt_context["agents_md"],
+        "skill_index": prompt_context["skill_index"],
         "gate_decisions": {},
         "revisions": {},
         "review_round": 0,
