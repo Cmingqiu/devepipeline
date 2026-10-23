@@ -299,10 +299,10 @@ worker 只订阅 `astream_events(..., version="v2")`，再翻译成统一信封�
 
 ### 4.1 关系图
 
-> 落地状态（2026-10-23）：下图是**目标模型**。当前已建 14 张表（projects / requirements /
+> 落地状态（2026-10-23）：下图是**目标模型**。当前已建 15 张表（projects / requirements /
 > requirement_versions / pipeline_runs / stage_runs / artifacts / stage_approvals / run_events /
-> agent_docs / skills / skill_files / mcp_configs / credentials / code_workspaces）。`pull_requests`
-> 与 GitHub PR 一起补；`llm_providers`、`model_bindings`（多 provider、每阶段模型）尚未建，
+> agent_docs / skills / skill_files / mcp_configs / credentials / code_workspaces / pull_requests）。
+> `llm_providers`、`model_bindings`（多 provider、每阶段模型）尚未建，
 > 当前由环境变量提供单一 provider。
 
 ```mermaid
@@ -922,9 +922,8 @@ devpipeline/
 | `sse-starlette` | `>=2,<3` | SSE（含 `Last-Event-ID` 处理与心跳） |
 | `cryptography` | `>=44` | Fernet 加密凭证 |
 | `python-multipart` | 随 FastAPI | 文件上传 |
-| `httpx` | `>=0.28,<1` | 出站（GitHub API 测试、仓库连通性） |
-| `PyGithub` | `>=2.5,<3` | GitHub PR |
-| `pytest` / `pytest-asyncio` / `respx` | `>=8` / `>=0.24` / `>=0.22` | 测试 |
+| `httpx` | `>=0.28,<1` | 出站（GitHub REST PR 创建/查询、仓库连通性）；PR 不用 PyGithub，避免同步实现与 respx 不可测 |
+| `pytest` / `pytest-asyncio` / `respx` | `>=8` / `>=0.24` / `>=0.22` | 测试（GitHub API 用 respx 回放，不需要真 token） |
 
 安装（M1 执行）：
 
@@ -1009,14 +1008,21 @@ curl -s -X POST localhost:8000/api/v1/projects/1/mcp/test -H 'content-type: appl
 
 ### M5 编码沙箱 + PR 评审
 
-范围：`git worktree` 模式（默认）+ Docker 模式（可选）；白名单命令执行器（超时、输出截断、日志落 `artifacts(kind=log)`）；`code_workspaces`/`pull_requests`；GitHub PR 创建与评审；评审驳回 → 编码回退受 `max_review_rounds` 约束。
+范围：`git worktree` 模式（默认）+ Docker 模式（后续）；白名单命令执行器（超时、输出截断）；
+`code_workspaces`/`pull_requests`；评审前推送分支 + 创建/复用 GitHub PR；评审驳回 → 编码回退受
+`max_review_rounds` 约束。
+
+落地状态（2026-10-23）：worktree 沙箱、命令白名单、PR 创建与 API 已完成；Docker 模式与
+workspace 清理策略未做。PR 客户端 `app/vcs/`（Protocol + httpx GitHub 实现，GitLab 仅抛错占位）。
 
 验收：
 ```bash
-# 沙箱内真跑测试（worktree 模式，本机需 git 与依赖）
-conda run -n devpipeline pytest tests/integration/test_sandbox_worktree.py -q
-# PR 创建（mock 或真 token）
-conda run -n devpipeline pytest tests/integration/test_github_pr.py -q   # respx 回放
+# 沙箱流程（worktree 模式，本机需 git）
+conda run -n devpipeline pytest tests/integration/pg/test_sandbox_pipeline.py -q
+# PR：commit + push（本地裸仓库）+ 幂等落库 + 事件 + API
+conda run -n devpipeline pytest tests/integration/pg/test_pull_request_pipeline.py -q
+# GitHub REST 客户端（respx 回放：创建、已存在 422 回查、鉴权失败）
+conda run -n devpipeline pytest tests/unit/test_vcs_github.py -q
 ```
 期望：`max_review_rounds=2` 时，第 3 次驳回后 run 终止为 `failed`，`error_code=review_round_exceeded`，且不再调用模型。
 
@@ -1025,10 +1031,10 @@ conda run -n devpipeline pytest tests/integration/test_github_pr.py -q   # respx
 | 项 | 我这边（本机） | 你那边（VPS） |
 |---|---|---|
 | 单元测试、类型检查、前端构建与 Vitest | ✅ | — |
-| MariaDB/PG 集成测试 | ❌ 无 Docker、无本地库 | ✅ 连你起的远程实例 |
+| MariaDB/PG 集成测试 | ✅ 已连远程实例跑通 | 可复跑 |
 | `docker compose up` 与健康检查 | ❌ | ✅ |
 | 真实 LLM 调用 | ⚠️ 无 key，用 fake provider | ✅ 填 `LLM_KEY_DEEPSEEK` |
-| GitHub PR | ⚠️ 无 token，respx 回放 | ✅ 真 token |
+| GitHub PR | ⚠️ respx 回放 + 本地裸仓库 push；无真 token | ✅ 配 `repo_url` + 凭证后真建 PR |
 
 ---
 
