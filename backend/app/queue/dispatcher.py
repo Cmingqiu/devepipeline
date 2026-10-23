@@ -26,6 +26,7 @@ def build_job_id(
     run_id: int,
     *,
     resume_payload: dict[str, Any] | None = None,
+    fork_payload: dict[str, Any] | None = None,
     continue_run: bool = False,
     dedupe_key: str | None = None,
 ) -> str:
@@ -37,6 +38,11 @@ def build_job_id(
             json.dumps(resume_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
         ).hexdigest()[:12]
         suffix = f"resume:{digest}"
+    elif fork_payload is not None:
+        digest = hashlib.sha1(
+            json.dumps(fork_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:12]
+        suffix = f"fork:{digest}"
     elif continue_run:
         suffix = "continue"
     else:
@@ -48,12 +54,14 @@ async def enqueue_run(
     run_id: int,
     *,
     resume_payload: dict[str, Any] | None = None,
+    fork_payload: dict[str, Any] | None = None,
     continue_run: bool = False,
     dedupe_key: str | None = None,
 ) -> str:
     job_id = build_job_id(
         run_id,
         resume_payload=resume_payload,
+        fork_payload=fork_payload,
         continue_run=continue_run,
         dedupe_key=dedupe_key,
     )
@@ -72,6 +80,7 @@ async def enqueue_run(
                 accepted = await arq_enqueue(
                     run_id,
                     resume_payload=resume_payload,
+                    fork_payload=fork_payload,
                     continue_run=continue_run,
                     job_id=job_id,
                 )
@@ -93,6 +102,10 @@ async def enqueue_run(
     if resume_payload is not None:
         inline.submit(
             execute_run(run_id, resume_payload=resume_payload), name=f"resume-{run_id}"
+        )
+    elif fork_payload is not None:
+        inline.submit(
+            execute_run(run_id, fork_payload=fork_payload), name=f"fork-{run_id}"
         )
     else:
         inline.submit(

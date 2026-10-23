@@ -12,6 +12,7 @@ from app.schemas.run import (
     ApprovalIn,
     ApprovalOut,
     EventOut,
+    ForkIn,
     PendingApproval,
     PullRequestOut,
     RunCreate,
@@ -53,7 +54,7 @@ async def list_runs(
     status_filter: str | None = Query(
         default=None,
         alias="status",
-        pattern="^(queued|running|waiting_approval|succeeded|failed|cancelled)$",
+        pattern="^(queued|running|paused|waiting_approval|succeeded|failed|cancelled)$",
     ),
 ) -> Page[RunOut]:
     rows, total = await run_service.list_runs(
@@ -227,6 +228,40 @@ async def cancel_run(session: SessionDep, run_id: int) -> RunOut:
     run = await run_service.cancel_run(session, run_id)
     prompt, completion = await run_service.run_usage(session, run.id)
     return _run_out(run, prompt, completion)
+
+
+@router.post(
+    "/runs/{run_id}/pause",
+    response_model=RunOut,
+    summary="暂停运行（只置状态，执行器在下一个节点边界停下；等待审批时返回 409）",
+)
+async def pause_run(session: SessionDep, run_id: int) -> RunOut:
+    run = await run_service.pause_run(session, run_id)
+    prompt, completion = await run_service.run_usage(session, run.id)
+    return _run_out(run, prompt, completion)
+
+
+@router.post(
+    "/runs/{run_id}/resume",
+    response_model=RunOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="继续已暂停的运行（从最后一个 checkpoint 续跑）",
+)
+async def resume_run(session: SessionDep, run_id: int) -> RunOut:
+    run = await run_service.resume_run(session, run_id)
+    prompt, completion = await run_service.run_usage(session, run.id)
+    return _run_out(run, prompt, completion)
+
+
+@router.post(
+    "/runs/{run_id}/fork",
+    response_model=RunOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="从历史 checkpoint 分叉出新运行（继承 from_stage 之前的产物）",
+)
+async def fork_run(session: SessionDep, run_id: int, payload: ForkIn) -> RunOut:
+    run = await run_service.fork_run(session, run_id, payload)
+    return _run_out(run, 0, 0)
 
 
 __all__ = ["router"]

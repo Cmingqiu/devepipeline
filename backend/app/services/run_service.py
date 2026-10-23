@@ -314,6 +314,140 @@ async def cancel_run(session: AsyncSession, run_id: int) -> PipelineRun:
     return run
 
 
+async def pause_run(session: AsyncSession, run_id: int) -> PipelineRun:
+    """暂停：只置状态，执行器在下一个节点边界停下（checkpoint 已落）。"""
+    run = await session.get(PipelineRun, run_id)
+    if run is None:
+        raise NotFoundError("运行不存在")
+    if run.status in {"succeeded", "failed", "cancelled"}:
+        return run
+    if run.status == "waiting_approval":
+        raise ConflictError("运行正在等待人工审批，不需要暂停")
+
+    from app.services.run_executor import sync_requirement_status
+
+    was_running = run.status == "running"
+    run.status = "paused"
+    run.updated_at = utcnow()
+    await sync_requirement_status(session, run, "paused")
+    await session.commit()
+    # running：执行器停下时自己发 run_paused；queued：不会再有人执行，这里直接发停止事件
+    await _emit_event_best_effort(
+        run.id,
+        "run_pausing" if was_running else "run_paused",
+        {} if was_running else {"status": "paused"},
+    )
+    return run
+
+
+async def resume_run(session: AsyncSession, run_id: int) -> PipelineRun:
+    run = await session.get(PipelineRun, run_id)
+    if run is None:
+        raise NotFoundError("运行不存在")
+    if run.status != "paused":
+        raise ConflictError("只有已暂停的运行可以继续")
+
+    from app.services.run_executor import sync_requirement_status
+
+    run.status = "running"
+    run.error_code = None
+    run.error_message = None
+    run.finished_at = None
+    run.updated_at = utcnow()
+    await sync_requirement_status(session, run, "running")
+    await session.commit()
+    await _emit_event_best_effort(run.id, "run_resumed", {"status": "running"})
+    await dispatcher.enqueue_run(
+        run.id, continue_run=True, dedupe_key=f"resume:{uuid4().hex[:8]}"
+    )
+    return run
+
+
+async def fork_run(session: AsyncSession, run_id: int, payload) -> PipelineRun:
+    """从历史 checkpoint 分叉：新 run + 新 thread，继承 from_stage 之前的产物。"""
+    from app.agents.fork import normalize_stage, stage_from_snapshot
+    from app.services.run_executor import get_graph
+
+    parent = await session.get(PipelineRun, run_id)
+    if parent is None:
+        raise NotFoundError("运行不存在")
+
+    graph = await get_graph()
+    parent_config = {
+        "configurable": {
+            "thread_id": parent.thread_id,
+            "checkpoint_id": payload.checkpoint_id,
+        }
+    }
+    snapshot = await graph.aget_state(parent_config)
+    if not (snapshot.values or {}):
+        raise NotFoundError("checkpoint 不存在或已失效")
+    from_stage = normalize_stage(payload.from_stage or stage_from_snapshot(snapshot))
+
+    requirement = await session.get(Requirement, parent.requirement_id)
+    if requirement is None:
+        raise NotFoundError("需求不存在")
+    assert_provider_ready()
+
+    new_run = PipelineRun(
+        project_id=parent.project_id,
+        requirement_id=parent.requirement_id,
+        requirement_version_id=parent.requirement_version_id,
+        thread_id=str(uuid4()),
+        status="queued",
+        current_stage=from_stage,
+        max_review_rounds=parent.max_review_rounds,
+    )
+    session.add(new_run)
+    await session.flush()
+    await _copy_earlier_artifacts(session, parent.id, new_run.id, from_stage)
+    requirement.latest_run_id = new_run.id
+    requirement.status = "queued"
+    await session.commit()
+
+    await dispatcher.enqueue_run(
+        new_run.id,
+        fork_payload={
+            "source_run_id": parent.id,
+            "source_thread_id": parent.thread_id,
+            "checkpoint_id": payload.checkpoint_id,
+            "from_stage": from_stage,
+        },
+    )
+    return new_run
+
+
+async def _copy_earlier_artifacts(
+    session: AsyncSession, source_run_id: int, target_run_id: int, from_stage: str
+) -> None:
+    """fork 的新 run 需要看到 from_stage 之前的产物（否则详情页缺阶段）。"""
+    from app.agents.state import STAGE_ORDER
+
+    before = list(STAGE_ORDER[: STAGE_ORDER.index(from_stage)])
+    if not before:
+        return
+    rows = (
+        await session.execute(
+            select(Artifact).where(
+                Artifact.run_id == source_run_id, Artifact.stage.in_(before)
+            )
+        )
+    ).scalars().all()
+    for row in rows:
+        session.add(
+            Artifact(
+                run_id=target_run_id,
+                stage=row.stage,
+                version=row.version,
+                kind=row.kind,
+                content=row.content,
+                summary=row.summary,
+                edited_by_human=row.edited_by_human,
+                created_at=row.created_at,
+            )
+        )
+
+
 async def list_events(
     session: AsyncSession,
     run_id: int,
@@ -352,7 +486,7 @@ async def list_states(run: PipelineRun, *, limit: int = 20) -> list[dict[str, An
 
 async def reconcile_run(session: AsyncSession, run: PipelineRun) -> PipelineRun:
     """以 LangGraph 状态为准修正 MariaDB 的 status / current_stage / last_checkpoint_id。"""
-    if run.status in {"succeeded", "failed", "cancelled"}:
+    if run.status in {"succeeded", "failed", "cancelled", "paused"}:
         return run
     try:
         _, snapshot = await _graph_and_snapshot(run)

@@ -49,6 +49,7 @@ async def enqueue_run(
     run_id: int,
     *,
     resume_payload: dict | None = None,
+    fork_payload: dict | None = None,
     continue_run: bool = False,
     job_id: str,
 ) -> str | None:
@@ -57,6 +58,10 @@ async def enqueue_run(
     if resume_payload is not None:
         job = await pool.enqueue_job(
             "resume_pipeline", run_id, resume_payload, _job_id=job_id
+        )
+    elif fork_payload is not None:
+        job = await pool.enqueue_job(
+            "fork_pipeline", run_id, fork_payload, _job_id=job_id
         )
     else:
         job = await pool.enqueue_job(

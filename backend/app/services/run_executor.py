@@ -45,6 +45,7 @@ ERROR_MESSAGES: dict[str, str] = {
 REQUIREMENT_STATUS_MAP: dict[str, str] = {
     "queued": "queued",
     "running": "running",
+    "paused": "paused",
     "waiting_approval": "waiting_approval",
     "succeeded": "done",
     "failed": "failed",
@@ -54,6 +55,10 @@ REQUIREMENT_STATUS_MAP: dict[str, str] = {
 
 class RunCancelled(Exception):
     """协作式取消：执行器在每个 chunk 边界检查 DB 状态。"""
+
+
+class RunPaused(Exception):
+    """协作式暂停：pause API 置 status=paused，执行器在下一个节点边界停下（checkpoint 已落）。"""
 
 
 class _TokenBatcher:
@@ -159,17 +164,18 @@ async def execute_run(
     run_id: int,
     *,
     resume_payload: dict[str, Any] | None = None,
+    fork_payload: dict[str, Any] | None = None,
     continue_run: bool = False,
     event_logger: EventLogger | None = None,
     tools: list[Any] | None = None,
 ) -> None:
     """执行一次（或恢复一次）流水线。异常一律转成 run.status=failed，不往外抛。
 
-    `tools` 只给测试注入用；正常路径由 `_execute` 按项目配置加载。
+    `fork_payload` 用于从历史 checkpoint 分叉（新 run + 新 thread）；`tools` 只给测试注入用。
     """
     events = event_logger or EventLogger(run_id, publish=False)
     try:
-        await _execute(run_id, resume_payload, continue_run, events, tools)
+        await _execute(run_id, resume_payload, continue_run, events, tools, fork_payload)
     finally:
         await events.close()
 
@@ -180,6 +186,7 @@ async def _execute(
     continue_run: bool,
     events: EventLogger,
     tools: list[Any] | None = None,
+    fork_payload: dict[str, Any] | None = None,
 ) -> None:
     try:
         graph = await get_graph()
@@ -194,12 +201,19 @@ async def _execute(
         if run is None:
             logger.warning("run_not_found", extra={"run_id": run_id})
             return
-        if run.status in {"succeeded", "failed", "cancelled"}:
+        if run.status in {"succeeded", "failed", "cancelled", "paused"}:
             return
 
         config = graph_config(run)
         if resume_payload is not None:
             payload: Any = Command(resume=resume_payload)
+        elif fork_payload is not None:
+            try:
+                assert_provider_ready()
+            except ProviderNotConfigured as exc:
+                await _fail(run_id, exc.code, exc.message, events)
+                return
+            payload = await _fork_start(graph, run, fork_payload)
         elif continue_run:
             payload = None
         else:
@@ -227,6 +241,17 @@ async def _execute(
         stage=current_stage,
     )
 
+    if fork_payload:
+        await events.emit(
+            "forked",
+            {
+                "source_run_id": fork_payload.get("source_run_id"),
+                "checkpoint_id": fork_payload.get("checkpoint_id"),
+                "from_stage": fork_payload.get("from_stage"),
+            },
+            stage=current_stage,
+        )
+
     batcher = _TokenBatcher(events)
     resolved_tools = tools
     if resolved_tools is None:
@@ -234,18 +259,21 @@ async def _execute(
     if resolved_tools:
         set_run_tools(run_id, resolved_tools)
 
-    cancel_checked_at = 0.0
+    control_checked_at = 0.0
     try:
         async for mode, chunk in graph.astream(
             payload, config, stream_mode=["updates", "messages", "custom"]
         ):
-            # 取消检查要查远程 MariaDB：messages 模式下每 chunk 都查会拖垮流式速度，
+            # 状态检查要查远程 MariaDB：messages 模式下每 chunk 都查会拖垮流式速度，
             # 所以节流到每 1 秒一次；updates（节点边界）永远检查。
             now = time.monotonic()
-            if mode == "updates" or (now - cancel_checked_at) >= 1.0:
-                cancel_checked_at = now
-                if await _is_cancelled(run_id):
+            if mode == "updates" or (now - control_checked_at) >= 1.0:
+                control_checked_at = now
+                status = await _control_status(run_id)
+                if status == "cancelled":
                     raise RunCancelled
+                if status == "paused":
+                    raise RunPaused
             if mode == "messages":
                 await _handle_message(batcher, chunk)
             elif mode == "custom":
@@ -256,6 +284,11 @@ async def _execute(
         await batcher.flush_all()
         logger.info("run_cancelled", extra={"run_id": run_id})
         await events.emit("run_finished", {"status": "cancelled", "error_code": None}, stage=None)
+        return
+    except RunPaused:
+        await batcher.flush_all()
+        await _mark_paused(run_id, graph, config, events)
+        logger.info("run_paused", extra={"run_id": run_id})
         return
     except ProviderNotConfigured as exc:
         await batcher.flush_all()
@@ -451,12 +484,73 @@ async def _handle_chunk(
         )
 
 
-async def _is_cancelled(run_id: int) -> bool:
+async def _control_status(run_id: int) -> str | None:
+    """执行器只认 DB 状态：cancelled / paused 在节点边界生效。"""
     async with get_session_factory()() as session:
-        status = await session.scalar(
+        return await session.scalar(
             select(PipelineRun.status).where(PipelineRun.id == run_id)
         )
-    return status == "cancelled"
+
+
+async def _mark_paused(run_id: int, graph, config: dict, events: EventLogger) -> None:
+    snapshot = await graph.aget_state(config)
+    checkpoint_id = _checkpoint_id(snapshot)
+    actually_paused = False
+    async with get_session_factory()() as session:
+        run = await session.get(PipelineRun, run_id)
+        if run is None:
+            return
+        # 暂停期间可能已被 resume/cancel：只有仍是 paused 才算这次暂停生效
+        if run.status == "paused":
+            run.last_checkpoint_id = checkpoint_id or run.last_checkpoint_id
+            run.reconciled_at = utcnow()
+            run.updated_at = utcnow()
+            await sync_requirement_status(session, run, "paused")
+            await session.commit()
+            actually_paused = True
+    if not actually_paused:
+        logger.info("run_pause_skipped", extra={"run_id": run_id})
+        return
+    await events.emit(
+        "run_paused",
+        {"status": "paused", "checkpoint_id": checkpoint_id},
+        stage=None,
+    )
+
+
+async def _fork_start(graph, run: PipelineRun, fork_payload: dict[str, Any]) -> Any:
+    """把源 checkpoint 的前序状态写进新 thread，并让图从 from_stage 的节点开始。
+
+    `aupdate_state(..., as_node=<上一个 gate>)` 会让 next 指向 from_stage 的节点；
+    analysis 是图入口，直接以 seed 作为 input。
+    """
+    from app.agents.fork import build_fork_seed, normalize_stage, route_gate_for
+    from app.core.exceptions import SemanticError
+
+    source_thread = str(fork_payload.get("source_thread_id") or "")
+    checkpoint_id = str(fork_payload.get("checkpoint_id") or "")
+    from_stage = normalize_stage(str(fork_payload.get("from_stage") or ""))
+    if not source_thread or not checkpoint_id:
+        raise SemanticError("fork 缺少源运行或 checkpoint")
+
+    parent_config = {
+        "configurable": {"thread_id": source_thread, "checkpoint_id": checkpoint_id}
+    }
+    snapshot = await graph.aget_state(parent_config)
+    if not (snapshot.values or {}):
+        raise SemanticError("源 checkpoint 不存在或已失效")
+
+    seed = build_fork_seed(
+        snapshot.values,
+        from_stage,
+        run_id=run.id,
+        max_review_rounds=run.max_review_rounds,
+    )
+    as_node = route_gate_for(from_stage)
+    if as_node is None:
+        return seed
+    await graph.aupdate_state(graph_config(run), seed, as_node=as_node)
+    return None
 
 
 async def _persist_stage(

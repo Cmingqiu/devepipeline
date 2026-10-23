@@ -12,7 +12,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db.graph_db import close_checkpointer, get_checkpointer
 from app.db.session import dispose_engine
 from app.services.events import close_redis
-from app.worker.tasks import purge_workspaces, resume_pipeline, run_pipeline
+from app.worker.tasks import fork_pipeline, purge_workspaces, resume_pipeline, run_pipeline
 
 logger = get_logger(__name__)
 
@@ -32,7 +32,7 @@ async def on_shutdown(ctx: dict[str, Any]) -> None:
 
 
 class WorkerSettings:
-    functions: ClassVar[list] = [run_pipeline, resume_pipeline]
+    functions: ClassVar[list] = [run_pipeline, resume_pipeline, fork_pipeline]
     # 每日兜底清理沙箱工作区（成功 run 已即时清理；这里收失败/取消/孤儿目录）
     cron_jobs: ClassVar[list] = [cron(purge_workspaces, hour=3, minute=30)]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

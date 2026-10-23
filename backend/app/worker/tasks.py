@@ -29,6 +29,16 @@ async def resume_pipeline(
     )
 
 
+async def fork_pipeline(
+    ctx: dict[str, Any], run_id: int, fork_payload: dict[str, Any]
+) -> None:
+    await execute_run(
+        run_id,
+        fork_payload=fork_payload,
+        event_logger=EventLogger(run_id, publish=True),
+    )
+
+
 async def purge_workspaces(ctx: dict[str, Any]) -> None:
     """每日兜底清理：清掉超过保留期的工作区（含失败/取消 run 的目录与孤儿目录）。"""
     from app.services.workspace_service import purge_expired_workspaces
@@ -37,4 +47,4 @@ async def purge_workspaces(ctx: dict[str, Any]) -> None:
     logger.info("workspace_purge_cron", extra=stats)
 
 
-__all__ = ["purge_workspaces", "resume_pipeline", "run_pipeline"]
+__all__ = ["fork_pipeline", "purge_workspaces", "resume_pipeline", "run_pipeline"]

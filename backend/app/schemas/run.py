@@ -12,6 +12,13 @@ class RunCreate(BaseModel):
     max_review_rounds: int = Field(default=2, ge=0, le=10, description="评审驳回后回退编码的最大轮次")
 
 
+class ForkIn(BaseModel):
+    checkpoint_id: str = Field(min_length=1, max_length=64, description="源运行的 checkpoint id")
+    from_stage: Literal["analysis", "design", "coding", "review"] | None = Field(
+        default=None, description="从哪个阶段的起点重跑，默认取 checkpoint 所在阶段"
+    )
+
+
 class PendingApproval(BaseModel):
     stage: str
     label: str

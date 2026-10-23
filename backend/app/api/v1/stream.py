@@ -61,7 +61,7 @@ async def stream_run(
                 break
             for row in rows:
                 cursor = max(cursor, row.seq)
-                if row.type == "run_finished":
+                if row.type in {"run_finished", "run_paused"}:
                     saw_finished = True
                 yield {
                     "id": str(row.seq),
@@ -71,13 +71,20 @@ async def stream_run(
             if len(rows) < REPLAY_PAGE:
                 break
 
-        # 已结束且回放里没有终止事件（例如取消后进程重启）：补一条，客户端即可断开
-        if status in TERMINAL_STATUSES and not saw_finished:
-            yield {
-                "id": str(cursor),
-                "event": "run_finished",
-                "data": json.dumps({"status": status}, ensure_ascii=False),
-            }
+        # 已结束/已暂停且回放里没有停止事件（例如取消后进程重启）：补一条，客户端即可断开
+        if not saw_finished and (status in TERMINAL_STATUSES or status == "paused"):
+            if status == "paused":
+                yield {
+                    "id": str(cursor),
+                    "event": "run_paused",
+                    "data": json.dumps({"status": "paused"}, ensure_ascii=False),
+                }
+            else:
+                yield {
+                    "id": str(cursor),
+                    "event": "run_finished",
+                    "data": json.dumps({"status": status}, ensure_ascii=False),
+                }
             return
 
         # 2) 实时订阅
@@ -106,6 +113,13 @@ async def stream_run(
                                 "data": json.dumps({"status": current}, ensure_ascii=False),
                             }
                             break
+                        if current == "paused":
+                            yield {
+                                "id": str(cursor),
+                                "event": "run_paused",
+                                "data": json.dumps({"status": "paused"}, ensure_ascii=False),
+                            }
+                            break
                     continue
 
                 idle_ticks = 0
@@ -118,7 +132,7 @@ async def stream_run(
                     "event": envelope["type"],
                     "data": json.dumps(envelope["payload"], ensure_ascii=False),
                 }
-                if envelope["type"] == "run_finished":
+                if envelope["type"] in {"run_finished", "run_paused"}:
                     break
         finally:
             await pubsub.unsubscribe(channel)
