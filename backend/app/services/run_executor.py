@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -18,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.agents.graph import NODE_TO_STAGE, build_graph
 from app.agents.llm import ProviderNotConfigured, assert_provider_ready
+from app.agents.tool_registry import clear_run_tools, set_run_tools
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.base import utcnow
@@ -159,11 +161,15 @@ async def execute_run(
     resume_payload: dict[str, Any] | None = None,
     continue_run: bool = False,
     event_logger: EventLogger | None = None,
+    tools: list[Any] | None = None,
 ) -> None:
-    """执行一次（或恢复一次）流水线。异常一律转成 run.status=failed，不往外抛。"""
+    """执行一次（或恢复一次）流水线。异常一律转成 run.status=failed，不往外抛。
+
+    `tools` 只给测试注入用；正常路径由 `_execute` 按项目配置加载。
+    """
     events = event_logger or EventLogger(run_id, publish=False)
     try:
-        await _execute(run_id, resume_payload, continue_run, events)
+        await _execute(run_id, resume_payload, continue_run, events, tools)
     finally:
         await events.close()
 
@@ -173,6 +179,7 @@ async def _execute(
     resume_payload: dict[str, Any] | None,
     continue_run: bool,
     events: EventLogger,
+    tools: list[Any] | None = None,
 ) -> None:
     try:
         graph = await get_graph()
@@ -203,6 +210,9 @@ async def _execute(
                 return
             payload = await _initial_state(session, run)
 
+        # 工具只在 worker 进程内注册（对象不可序列化，不能进 checkpoint）
+        project_id = run.project_id
+
         run.status = "running"
         run.started_at = run.started_at or utcnow()
         run.updated_at = utcnow()
@@ -221,10 +231,16 @@ async def _execute(
     )
 
     batcher = _TokenBatcher(events)
+    resolved_tools = tools
+    if resolved_tools is None:
+        resolved_tools = await _load_tools(project_id, events)
+    if resolved_tools:
+        set_run_tools(run_id, resolved_tools)
+
     cancel_checked_at = 0.0
     try:
         async for mode, chunk in graph.astream(
-            payload, config, stream_mode=["updates", "messages"]
+            payload, config, stream_mode=["updates", "messages", "custom"]
         ):
             # 取消检查要查远程 MariaDB：messages 模式下每 chunk 都查会拖垮流式速度，
             # 所以节流到每 1 秒一次；updates（节点边界）永远检查。
@@ -235,6 +251,8 @@ async def _execute(
                     raise RunCancelled
             if mode == "messages":
                 await _handle_message(batcher, chunk)
+            elif mode == "custom":
+                await _handle_custom(events, chunk)
             else:
                 await _handle_chunk(run_id, graph, config, chunk, events, batcher)
     except RunCancelled:
@@ -251,9 +269,67 @@ async def _execute(
         await batcher.flush_all()
         await _fail(run_id, "internal", f"{type(exc).__name__}: {exc}", events)
         return
+    finally:
+        clear_run_tools(run_id)
 
     await batcher.flush_all()
     await _finalize(run_id, graph, config, events)
+
+
+TOOLS_LOAD_TIMEOUT = 25.0
+
+
+async def _load_tools(project_id: int, events: EventLogger) -> list[Any]:
+    """按项目配置加载工具；失败/超时降级为「无工具」，并把原因推进时间线。"""
+    from app.agents.tools import load_project_tools, tools_enabled
+
+    if not tools_enabled():
+        return []
+    try:
+        async with get_session_factory()() as session:
+            tools, diagnostics = await asyncio.wait_for(
+                load_project_tools(session, project_id), timeout=TOOLS_LOAD_TIMEOUT
+            )
+    except TimeoutError:
+        logger.warning("tools_load_timeout", extra={"project_id": project_id})
+        await events.emit(
+            "error",
+            {"code": "tools_load_timeout", "message": "工具加载超时，编码阶段将在无工具下运行"},
+            stage=None,
+        )
+        return []
+    except Exception as exc:
+        logger.exception("tools_load_failed", extra={"project_id": project_id})
+        await events.emit(
+            "error",
+            {"code": "tools_load_failed", "message": str(exc)[:500]},
+            stage=None,
+        )
+        return []
+
+    for item in diagnostics:
+        if not item.get("ok"):
+            await events.emit(
+                "error",
+                {
+                    "code": "mcp_tool_unavailable",
+                    "message": f"{item.get('server')}: {item.get('error')}"[:500],
+                },
+                stage=None,
+            )
+    return tools
+
+
+async def _handle_custom(events: EventLogger, chunk: Any) -> None:
+    """节点用 get_stream_writer() 推来的自定义事件（目前是 tool_started / tool_finished）。"""
+    if not isinstance(chunk, dict):
+        return
+    event_type = str(chunk.get("type") or "")
+    if event_type not in {"tool_started", "tool_finished"}:
+        return
+    payload = chunk.get("payload") or {}
+    stage = chunk.get("stage")
+    await events.emit(event_type, payload, stage=str(stage) if stage else None)
 
 
 async def _handle_message(batcher: _TokenBatcher, chunk: Any) -> None:

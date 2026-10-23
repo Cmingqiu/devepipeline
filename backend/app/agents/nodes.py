@@ -2,19 +2,26 @@
 
 设计约束：这里**不碰数据库**。节点只返回 state 增量与 `last_stage`（时间、用量、产物），
 由执行器统一落 MariaDB —— 图纯函数化后，测试可以完全不连库地验证路由与产物。
+
+编码节点例外：它从进程内注册表取执行器预先装好的工具（MCP / 技能读取），
+并通过 `get_stream_writer()` 把 tool_started / tool_finished 实时推给 SSE。
 """
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.types import interrupt
 
 from app.agents import prompts
 from app.agents.llm import get_chat_model
 from app.agents.state import DECISIONS, PipelineState, StageOutcome
 from app.db.base import utcnow
+
+MAX_TOOL_ITERS = 6
 
 
 def _now_iso() -> str:
@@ -81,6 +88,134 @@ async def _call_model(model: Any, messages: list[Any]) -> tuple[str, dict[str, i
     return "".join(parts).strip(), usage
 
 
+def _stream_writer():
+    """图内可用；不在图里（单元测试直接调节点）时返回 None。"""
+    try:
+        from langgraph.config import get_stream_writer
+
+        return get_stream_writer()
+    except Exception:  # noqa: BLE001  非图执行上下文里没有 writer
+        return None
+
+
+def _emit(writer, event_type: str, payload: dict[str, Any], stage: str) -> None:
+    if writer is None:
+        return
+    try:
+        writer({"type": event_type, "stage": stage, "payload": payload})
+    except Exception:  # noqa: BLE001, S110  事件发不出去不能打断编码
+        pass
+
+
+def _short_args(args: Any, limit: int = 800) -> str:
+    try:
+        text = json.dumps(args, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        text = str(args)
+    return text[:limit]
+
+
+def _tool_output_text(output: Any) -> str:
+    """MCP 工具常返回 content blocks（[{'type':'text','text':'5'}]），拆成纯文本回灌模型。"""
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        parts: list[str] = []
+        for item in output:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif isinstance(item, str):
+                parts.append(item)
+        if parts:
+            return "\n".join(parts)
+    return str(output)
+
+
+async def _stream_message(model: Any, messages: list[Any]) -> tuple[Any, dict[str, int]]:
+    """流式聚合一整轮回复（需要拿 tool_calls，所以不能只看文本）。"""
+    astream = getattr(model, "astream", None)
+    if astream is None:
+        response = await model.ainvoke(messages)
+        return response, _usage_of(response)
+
+    aggregate = None
+    usage: dict[str, int] = {}
+    async for chunk in astream(messages):
+        aggregate = chunk if aggregate is None else aggregate + chunk
+        chunk_usage = _usage_of(chunk)
+        if chunk_usage.get("prompt_tokens") or chunk_usage.get("completion_tokens"):
+            usage = chunk_usage
+    return aggregate, usage
+
+
+async def _run_tool_loop(
+    model: Any,
+    tools: list[Any],
+    messages: list[Any],
+    *,
+    stage: str,
+) -> tuple[str, dict[str, int], int]:
+    """工具调用循环：最多 MAX_TOOL_ITERS 轮；工具事件通过 stream writer 实时发出。"""
+    writer = _stream_writer()
+    by_name = {item.name: item for item in tools}
+    bound = model.bind_tools(tools) if hasattr(model, "bind_tools") else model
+    convo = list(messages)
+    texts: list[str] = []
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    tool_rounds = 0
+
+    for _ in range(MAX_TOOL_ITERS):
+        result, turn_usage = await _stream_message(bound, convo)
+        usage["prompt_tokens"] += turn_usage.get("prompt_tokens", 0)
+        usage["completion_tokens"] += turn_usage.get("completion_tokens", 0)
+        if result is None:
+            break
+        convo.append(result)
+        text = _text_of(result)
+        if text:
+            texts.append(text)
+
+        calls = getattr(result, "tool_calls", None) or []
+        if not calls:
+            break
+        tool_rounds += 1
+        for call in calls:
+            name = str(call.get("name") or "")
+            args = call.get("args") or {}
+            started = time.monotonic()
+            _emit(writer, "tool_started", {"name": name, "args": _short_args(args)}, stage)
+            tool = by_name.get(name)
+            if tool is None:
+                output, ok = f"未知工具：{name}", False
+            else:
+                try:
+                    output = await tool.ainvoke(args)
+                    ok = True
+                except Exception as exc:  # noqa: BLE001  工具失败要回灌给模型，不能中断整条流水线
+                    output, ok = f"{type(exc).__name__}: {exc}", False
+            duration = int((time.monotonic() - started) * 1000)
+            normalized = _tool_output_text(output)
+            _emit(
+                writer,
+                "tool_finished",
+                {
+                    "name": name,
+                    "ok": ok,
+                    "result": normalized[:2000],
+                    "duration_ms": duration,
+                },
+                stage,
+            )
+            convo.append(
+                ToolMessage(
+                    content=normalized[:8000],
+                    tool_call_id=str(call.get("id") or name),
+                    name=name or None,
+                )
+            )
+    return "\n\n".join(texts).strip(), usage, tool_rounds
+
+
 def _attempt(state: PipelineState, stage: str) -> int:
     return int((state.get("revisions") or {}).get(stage, 0)) + 1
 
@@ -92,13 +227,18 @@ async def _run_stage(
     prompt_builder,
     doc_field: str,
     kind: str,
+    tools: list[Any] | None = None,
 ) -> dict[str, Any]:
     started = _now_iso()
     model = get_chat_model(stage)
     system, user = prompt_builder(state)
-    text, usage = await _call_model(
-        model, [SystemMessage(content=system), HumanMessage(content=user)]
-    )
+    messages = [SystemMessage(content=system), HumanMessage(content=user)]
+
+    tool_rounds = 0
+    if tools:
+        text, usage, tool_rounds = await _run_tool_loop(model, tools, messages, stage=stage)
+    else:
+        text, usage = await _call_model(model, messages)
     finished = _now_iso()
 
     outcome: StageOutcome = {
@@ -107,6 +247,7 @@ async def _run_stage(
         "started_at": started,
         "finished_at": finished,
         "usage": usage,
+        "tool_rounds": tool_rounds,
         "artifact": {
             "kind": kind,
             "content": text,
@@ -139,12 +280,15 @@ async def design_system(state: PipelineState) -> dict[str, Any]:
 
 
 async def coding(state: PipelineState) -> dict[str, Any]:
+    from app.agents.tool_registry import get_run_tools
+
     return await _run_stage(
         state,
         stage="coding",
         prompt_builder=prompts.coding_prompt,
         doc_field="code_diff",
         kind="diff",
+        tools=get_run_tools(state.get("run_id")),
     )
 
 

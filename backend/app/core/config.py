@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     skill_extract_max_mb: int = 50
     skill_files_max: int = 200
 
+    # 编码阶段是否加载 MCP / 技能工具（关掉后等价于纯文本 coding）
+    tools_enabled: bool = True
+
     # LLM（M2 启用）
     llm_provider_name: str = "deepseek-v4-flash"
     llm_endpoint: str = "https://api.deepseek.com/chat/completions"
