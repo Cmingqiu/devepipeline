@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 / M2 / M3 完成**（需求管理 → 4 阶段流水线 + 人工审批 → arq worker + SSE 实时面板 + Vue Flow 流水线图）。M4 / M5 待做。
+当前进度：**M1 / M2 / M3 / M4 完成**（需求管理 → 4 阶段流水线 + 人工审批 → arq + SSE 实时面板 → 项目上下文配置）。M4 剩余（MCP 工具注入）、M3 剩余（暂停/fork）、M5 待做。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -140,10 +140,24 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
   `PipelineGraph` 用 Vue Flow 画 8 个节点（4 阶段 + 4 审批门，五态配色）；运行详情用 SSE 替代轮询，
   连接失败回退 5 s 轮询；实时流面板自动跟随、时间线着色。
 
+## M4 已实现
+
+- 数据：`agent_docs`（版本 + active）、`skills` / `skill_files`、`mcp_configs`、`credentials`；`projects` 增加 `repo_url / repo_provider / default_branch / credential_id`（迁移 `acf41347204f`）。
+- AGENTS.md：PUT 产生新版本并置为生效（相同内容不产生新版本），版本列表只回元信息；204 = 未配置。
+- Skills：上传 zip（≤20 MB、解压 ≤50 MB、≤200 文件），拒绝 `..` / 绝对路径 / 符号链接，必须含 `SKILL.md`；
+  文本入库供在线预览、二进制只落磁盘；同名技能覆盖。
+- MCP：按 name 整体覆盖保存；输出时把 token/secret/key/password 掩码成 `****1234`；连通性测试走
+  `langchain-mcp-adapters`（单 server 15 s 超时，失败不拖垮其它 server）。
+- 仓库与凭证：Fernet 加密（SHA-256 派生 `APP_SECRET_KEY`，带 `key_version`），接口只回末 4 位；`git ls-remote` 测试连接，回显时替换掉带 token 的 URL。
+- 注入：run 初始化时冻结 AGENTS.md 全文 + 每个技能 `SKILL.md`（≤4k/个、≤12k 总），作为 `agents_md` / `skill_index` 进入 prompt 上下文。
+- 前端：`/projects/:id/settings` 四个 Tab（AGENTS.md 编辑与版本、Skills 上传/文件树预览、MCP JSON 编辑与测试、仓库与凭证），凭证只显示 hint。
+- 事件落库修复：`close()` 取消在途 flush 会整批丢事件（实测丢 `interrupt`），改为取消时把批次放回缓冲并等任务退出。
+
 ## 未实现（后续里程碑）
 
+- M4 剩余：MCP 工具真正挂到编码 agent（目前只做配置与连通性测试）；Skills 按需读取工具（目前是全量注入）；
+  多 provider / 每阶段模型选择（`llm_providers` / `model_bindings` 表尚未建，当前走环境变量单一 provider）。
 - M3 剩余：暂停（worker 边界）、从任意 checkpoint `fork` 重跑。
-- M4：AGENTS.md / Skills / MCP 配置与注入。
 - M5：编码沙箱（git worktree / Docker）+ 白名单命令 + GitHub PR + 评审回退落代码。
 
 ## 已知约束（踩过的坑，别再踩）
@@ -164,3 +178,6 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | Windows 事件循环统一 selector | M2 的 psycopg 不支持 Proactor；`backend/main.py` 入口在 uvicorn 建 loop 前设置（`app/core/server.py`） |
 | worker 心跳 `devpipeline:health` | 每 30 s 刷新；api 入队前检查心跳，没有就回退进程内执行，否则 run 会永远停在「排队中」（2026-10-23 实测） |
 | arq job id 必须确定性 | `run:{id}:start` / `run:{id}:continue` / `run:{id}:resume:{payload hash}`；否则双击启动或 api 重启 requeue 会让**两个 worker 同时跑同一个 run**（实测产生两个 analysis artifact、事件翻倍） |
+| 事件 flush 取消要把批次放回 | `close()` 取消在途 flush 时若直接丢弃批次，会丢尾部事件（实测丢 `interrupt`）；取消时 `batch + buffer` 回填再等任务退出 |
+| 技能包 zip 必须做路径校验 | 拒绝 `..`/绝对路径/符号链接，限制 zip ≤20 MB、解压 ≤50 MB、≤200 文件；否则上传即任意写文件 |
+| `APP_SECRET_KEY` 不能随意更换 | 凭证密文由它派生；换了之后旧凭证解不开（`credential_decrypt_failed`），需要重新填 token |

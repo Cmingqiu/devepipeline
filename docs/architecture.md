@@ -299,6 +299,12 @@ worker 只订阅 `astream_events(..., version="v2")`，再翻译成统一信封�
 
 ### 4.1 关系图
 
+> 落地状态（2026-10-23）：下图是**目标模型**。当前已建 13 张表（projects / requirements /
+> requirement_versions / pipeline_runs / stage_runs / artifacts / stage_approvals / run_events /
+> agent_docs / skills / skill_files / mcp_configs / credentials）。`code_workspaces`、`pull_requests`
+> 随 M5 建；`llm_providers`、`model_bindings`（多 provider、每阶段模型）尚未建，当前由环境变量
+> 提供单一 provider。
+
 ```mermaid
 erDiagram
   projects ||--o{ requirements : "1:N"
