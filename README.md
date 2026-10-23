@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 / M2 / M3 / M4 完成**（需求管理 → 4 阶段流水线 + 人工审批 → arq + SSE 实时面板 → 项目上下文配置）。M4 剩余（MCP 工具注入）、M3 剩余（暂停/fork）、M5 待做。
+当前进度：**M1 / M2 / M3 / M4 完成**（需求管理 → 4 阶段流水线 + 人工审批 → arq + SSE 实时面板 → 上下文配置 + 编码 agent 工具）。M3 剩余（暂停/fork）、多 provider、M5 待做。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -150,13 +150,16 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
   `langchain-mcp-adapters`（单 server 15 s 超时，失败不拖垮其它 server）。
 - 仓库与凭证：Fernet 加密（SHA-256 派生 `APP_SECRET_KEY`，带 `key_version`），接口只回末 4 位；`git ls-remote` 测试连接，回显时替换掉带 token 的 URL。
 - 注入：run 初始化时冻结 AGENTS.md 全文 + 每个技能 `SKILL.md`（≤4k/个、≤12k 总），作为 `agents_md` / `skill_index` 进入 prompt 上下文。
-- 前端：`/projects/:id/settings` 四个 Tab（AGENTS.md 编辑与版本、Skills 上传/文件树预览、MCP JSON 编辑与测试、仓库与凭证），凭证只显示 hint。
+- 编码 agent 工具：执行器按项目加载 MCP 工具（stdio / streamable_http，配置里 `$CRED:<id>` 加载时解密）+
+  `read_skill_file`（按需读技能包脚本），工具名加 server 前缀；编码节点最多 6 轮工具循环，
+  工具事件经 `get_stream_writer()` → custom 流 → SSE 实时推送；加载失败/超时降级为无工具并把原因写进时间线。
+- 前端：`/projects/:id/settings` 四个 Tab（AGENTS.md 编辑与版本、Skills 上传/文件树预览、MCP JSON 编辑与测试、仓库与凭证），凭证只显示 hint；运行时间线展示工具调用与结果。
 - 事件落库修复：`close()` 取消在途 flush 会整批丢事件（实测丢 `interrupt`），改为取消时把批次放回缓冲并等任务退出。
 
 ## 未实现（后续里程碑）
 
-- M4 剩余：MCP 工具真正挂到编码 agent（目前只做配置与连通性测试）；Skills 按需读取工具（目前是全量注入）；
-  多 provider / 每阶段模型选择（`llm_providers` / `model_bindings` 表尚未建，当前走环境变量单一 provider）。
+- M4 剩余：多 provider / 每阶段模型选择（`llm_providers` / `model_bindings` 表尚未建，当前走环境变量单一 provider）；
+  技能仍以 SKILL.md 全量注入为主，`read_skill_file` 只覆盖额外脚本/资料。
 - M3 剩余：暂停（worker 边界）、从任意 checkpoint `fork` 重跑。
 - M5：编码沙箱（git worktree / Docker）+ 白名单命令 + GitHub PR + 评审回退落代码。
 
@@ -181,3 +184,5 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | 事件 flush 取消要把批次放回 | `close()` 取消在途 flush 时若直接丢弃批次，会丢尾部事件（实测丢 `interrupt`）；取消时 `batch + buffer` 回填再等任务退出 |
 | 技能包 zip 必须做路径校验 | 拒绝 `..`/绝对路径/符号链接，限制 zip ≤20 MB、解压 ≤50 MB、≤200 文件；否则上传即任意写文件 |
 | `APP_SECRET_KEY` 不能随意更换 | 凭证密文由它派生；换了之后旧凭证解不开（`credential_decrypt_failed`），需要重新填 token |
+| 工具对象不能进 state | MCP 客户端/句柄不可序列化，进 checkpoint 会炸；执行器按 run 注册进程内 registry，节点按 run_id 取 |
+| MCP 工具输出要归一化 | adapters 返回 content blocks（[{"type":"text","text":"5"}]），直接 str 回灌模型会很脏；先拆成纯文本 |
