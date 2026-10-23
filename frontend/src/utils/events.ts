@@ -7,6 +7,8 @@ export const RUN_EVENT_META: Record<RunEventType, { label: string; tone: EventTo
   run_started: { label: '运行开始', tone: 'info' },
   stage_started: { label: '阶段开始', tone: 'info' },
   llm_token: { label: 'Token', tone: 'default' },
+  tool_started: { label: '工具调用', tone: 'info' },
+  tool_finished: { label: '工具结果', tone: 'default' },
   usage: { label: '用量', tone: 'info' },
   artifact_saved: { label: '产物保存', tone: 'success' },
   stage_finished: { label: '阶段完成', tone: 'success' },
@@ -53,6 +55,18 @@ export function formatEventSummary(
       return `进入阶段：${stageLabel(text(payload.stage))}`
     case 'llm_token':
       return truncateText(text(payload.text), 40)
+    case 'tool_started': {
+      const name = text(payload.name) || 'unknown'
+      const args = text(payload.args)
+      return args ? `${name}（${truncateText(args, 40)}）` : name
+    }
+    case 'tool_finished': {
+      const name = text(payload.name) || 'unknown'
+      const ok = payload.ok === true
+      const duration = num(payload.duration_ms)
+      const head = ok ? `${name} 成功` : `${name} 失败`
+      return duration !== null ? `${head}，耗时 ${duration} ms` : head
+    }
     case 'usage': {
       const prompt = num(payload.prompt_tokens) ?? 0
       const completion = num(payload.completion_tokens) ?? 0
