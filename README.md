@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 / M2 / M3 / M4 完成；M5 沙箱 + GitHub PR 完成**（需求 → 4 阶段流水线 + 人工审批 → arq/SSE → 上下文与工具 → 编码沙箱 → 推送分支并建 PR）。M5 剩余（Docker 沙箱、workspace 清理）、M3 剩余（暂停/fork）、多 provider 待做。
+当前进度：**M1 / M2 / M3 / M4 完成；M5 沙箱 + PR + 工作区清理完成**。剩余：Docker 沙箱模式、多 provider / 每阶段模型、GitLab PR。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -139,6 +139,11 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - 前端：`useRunStream` 订阅 10 种事件（token 按阶段拼接、时间线 2000 条上限、断线由浏览器重连带 `Last-Event-ID`）；
   `PipelineGraph` 用 Vue Flow 画 8 个节点（4 阶段 + 4 审批门，五态配色）；运行详情用 SSE 替代轮询，
   连接失败回退 5 s 轮询；实时流面板自动跟随、时间线着色。
+- 暂停/继续：`POST /runs/{id}/pause` 置 `status=paused`，执行器在下一个节点边界停下并落 checkpoint、发 `run_paused`；
+  `resume` 置回 `running` 并用 `continue_run` 入队，从断点继续。等待审批时拒绝暂停（409）。
+- checkpoint fork：`POST /runs/{id}/fork`（`{checkpoint_id, from_stage?}`）新建 run + 新 thread，
+  从目标 checkpoint 取初值、清空 `from_stage` 及之后产物、复制之前的 artifacts，再从该阶段节点重跑；
+  事件 `forked` 记录来源。前端在状态历史每条 checkpoint 上提供「从此处 fork」。
 
 ## M4 已实现
 
@@ -185,7 +190,6 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - M5 剩余：Docker 沙箱模式；PR 状态（merged/closed）只在建 PR 时写入，没有轮询刷新。
 - M4 剩余：多 provider / 每阶段模型选择（`llm_providers` / `model_bindings` 表尚未建，当前走环境变量单一 provider）；
   技能仍以 SKILL.md 全量注入为主，`read_skill_file` 只覆盖额外脚本/资料。
-- M3 剩余：暂停（worker 边界）、从任意 checkpoint `fork` 重跑。
 - GitLab：`VcsClient` 已抽象，`build_vcs_client` 对 gitlab 直接抛错，实现待补。
 
 ## 已知约束（踩过的坑，别再踩）
@@ -217,5 +221,7 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | 沙箱 git commit 的 message 必须 argv 直传 | `run_command` 走 shlex 拆分，未加引号的 message（含空格/中文）会被拆成多条 pathspec，git 报 `pathspec did not match`；`Workspace.commit` 改用 `_run_git` |
 | push 带 token 的命令必须脱敏 | `git push https://x-access-token:<token>@…` 会进命令记录，git 报错还会回显完整 URL；`display_command` + 输出替换成 `***` |
 | PR 失败不能阻断评审 | 推送/API 失败只发 `error(pr_unavailable)` 并继续本地 diff 评审；PR 是交付物不是前置条件 |
+| 暂停/取消只能在节点边界生效 | 进程内队列无法强杀正在跑的协程；DB `status` 是唯一控制通道，每个 `updates` 边界必查 |
+| fork 入口用 `aupdate_state(as_node=前一个 gate)` | `Command(goto=...)` 作为图输入在 LangGraph 1.1.6 实测被忽略（从 START 重跑并覆盖 seed）；只有 `as_node` 能让新 thread 的 next 指向 `from_stage` 节点 |
 | workspace 清理只允许终态 | 等审批/运行中的目录还要被 resume 复用，删了等于抽走正在用的沙箱；自动路径只在 `succeeded` 执行 |
 | 保留期清理要扫孤儿目录 | run 行被删后目录没人认领，只按 DB 行清会永久残留；按目录 mtime 扫并顺手清 |

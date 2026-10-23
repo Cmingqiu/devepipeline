@@ -267,13 +267,16 @@ SSE 中继这一步走 Redis 而不是直连 worker，是因为 `api` 可能有�
 
 ### 3.4 回溯与重跑
 
-三种语义，接口是 `POST /runs/{id}/replay`：
+三种语义：
 
-| mode | 行为 | 用在哪 |
+| 入口 | 行为 | 用在哪 |
 |---|---|---|
-| `fork` | 新建 run + 新 `thread_id`；从目标 checkpoint 取 `channel_values` 作初值，清空 `from_stage` 及其之后的产物，从 `from_stage` 重新执行 | 想换一种设计、或从"分析通过"那一刻开分支 |
-| `resume` | 同 `thread_id`，带 `checkpoint_id`，input 传 `None` 继续 | worker 崩溃后从断点续跑 |
+| `fork`（`POST /runs/{id}/fork`，`{checkpoint_id, from_stage?}`） | 新建 run + 新 `thread_id`；从目标 checkpoint 取 `channel_values` 作初值，清空 `from_stage` 及其之后的产物与决策，复制之前的 artifacts，然后从 `from_stage` 的节点重新执行 | 想换一种设计、或从"分析通过"那一刻开分支 |
+| `pause` / `resume`（`POST /runs/{id}/pause`、`/resume`） | 置 DB `status=paused`，执行器在下一个节点边界停下（checkpoint 已落）；resume 置回 `running` 并用 `continue_run` 入队，`input=None` 从断点继续 | 长时间运行中途让出 worker、人工介入 |
 | `retry`（`POST /runs/{id}/retry`） | 同 thread，从失败节点重跑（`aupdate_state` 清理失败标记后入队） | 失败重试，不换产物 |
+
+fork 的实现细节：`aupdate_state(config, seed, as_node=<from_stage 前一个 gate>)` 会让新 thread 的 `next` 指向 `from_stage` 的节点；
+`analysis` 是图入口，直接把 seed 作为 input。**`Command(goto=...)` 作为图输入在 LangGraph 1.1.6 实测会被忽略**，不能用它指定入口。
 
 checkpoint 列表来自 `graph.aget_state_history(config, limit=N)`，返回 `checkpoint_id / next / values 摘要 / created_at`，不返回完整 `values`（大文本会撑爆响应）。
 
@@ -695,10 +698,10 @@ erDiagram
 | GET | `/api/v1/runs` | 分页；`project_id/status/requirement_id` 过滤 |
 | GET | `/api/v1/runs/{run_id}` | 运行详情（含 `pending_approval` 摘要、`usage` 汇总）；读时与图状态校正 |
 | POST | `/api/v1/runs/{run_id}/cancel` | 取消：入队取消任务，worker 在下一个节点边界停止；`queued` 直接置 `cancelled` |
-| POST | `/api/v1/runs/{run_id}/pause` | 暂停：只允许在节点边界生效（写 Redis `run:{id}:control=pause`） |
-| POST | `/api/v1/runs/{run_id}/resume` | 取消暂停 |
+| POST | `/api/v1/runs/{run_id}/pause` | 暂停：置 `status=paused`，执行器在下一个节点边界停下；等待审批时 409 |
+| POST | `/api/v1/runs/{run_id}/resume` | 继续已暂停的运行：置 `running` 并 `continue_run` 入队，从断点续跑 |
 | POST | `/api/v1/runs/{run_id}/retry` | 失败重试：从失败节点重跑，`attempt` +1 |
-| POST | `/api/v1/runs/{run_id}/replay` | `{checkpoint_id, from_stage, mode: fork\|resume}`，见 §3.4 |
+| POST | `/api/v1/runs/{run_id}/fork` | `{checkpoint_id, from_stage?}`：新建 run 从历史 checkpoint 分叉，见 §3.4 |
 | GET | `/api/v1/runs/{run_id}/states` | `aget_state_history` 包装：`[{checkpoint_id, stage, next, created_at, values_summary}]`，`limit` ≤ 50 |
 | GET | `/api/v1/runs/{run_id}/pending-approval` | 无待审批返回 204；有则返回 `{stage, artifact_id, payload}` |
 | POST | `/api/v1/runs/{run_id}/approval` | `{decision, feedback?, edited_content?}`；非 `waiting_approval` 状态 409 |
@@ -987,12 +990,16 @@ curl -s -X POST localhost:8000/api/v1/runs/1/approval -d '{"decision":"approved"
 
 范围：arq worker + `astream_events` 翻译 + Redis pub/sub + SSE 中继 + `run_events` 批量落库；Vue Flow 实时图、时间线、token/工具面板、取消/暂停/重试、`/states` + fork 重跑。
 
+落地状态（2026-10-23）：SSE / 事件 / 取消 / 暂停 / 继续 / checkpoint fork 均已完成；前端运行详情支持暂停继续按钮与「从此处 fork」弹窗。
+
 验收：
 ```bash
-conda run -n devpipeline arq app.worker.main.WorkerSettings   # 另开一个终端
+conda run -n devpipeline python worker.py                    # 另开一个终端
 curl -N localhost:8000/api/v1/runs/1/stream                   # 期望：先回放历史，再实时推 llm_token
+conda run -n devpipeline pytest tests/integration/pg/test_pause_fork.py -q   # 暂停边界 / 恢复 / fork
 ```
-期望：首个事件 < 1 s；断网 5 s 后重连不重复（`seq` 连续）；`run_finished` 后连接关闭；取消后 worker 在下一个节点边界停止并落 `cancelled`。
+期望：首个事件 < 1 s；断网 5 s 后重连不重复（`seq` 连续）；`run_finished` 后连接关闭；取消后 worker 在下一个节点边界停止并落 `cancelled`；
+暂停在节点边界停住并发 `run_paused`，继续后从断点续跑；fork 的新 run 继承前序 artifact 并从 `from_stage` 重新执行。
 
 ### M4 AGENTS.md / Skills / MCP
 
