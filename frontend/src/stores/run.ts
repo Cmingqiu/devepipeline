@@ -10,6 +10,7 @@ import type {
   Artifact,
   ArtifactDetail,
   PendingApproval,
+  PullRequest,
   Run,
   RunDetail,
   RunState,
@@ -40,6 +41,8 @@ export const useRunStore = defineStore('run', () => {
   const artifacts = ref<Artifact[]>([])
   const artifactsTotal = ref(0)
   const artifactsLoading = ref(false)
+  const pullRequests = ref<PullRequest[]>([])
+  const pullRequestsLoading = ref(false)
   const selectedArtifact = ref<ArtifactDetail | null>(null)
   const artifactLoading = ref(false)
   const artifactSaving = ref(false)
@@ -155,6 +158,15 @@ export const useRunStore = defineStore('run', () => {
       artifactsTotal.value = data.total
     } finally {
       artifactsLoading.value = false
+    }
+  }
+
+  async function fetchPullRequests(runId: number): Promise<void> {
+    pullRequestsLoading.value = true
+    try {
+      pullRequests.value = await runsApi.listPullRequests(runId)
+    } finally {
+      pullRequestsLoading.value = false
     }
   }
 
@@ -306,6 +318,7 @@ export const useRunStore = defineStore('run', () => {
     states.value = []
     artifacts.value = []
     artifactsTotal.value = 0
+    pullRequests.value = []
     selectedArtifact.value = null
   }
 
@@ -334,6 +347,8 @@ export const useRunStore = defineStore('run', () => {
     artifacts,
     artifactsTotal,
     artifactsLoading,
+    pullRequests,
+    pullRequestsLoading,
     selectedArtifact,
     artifactLoading,
     artifactSaving,
@@ -350,6 +365,7 @@ export const useRunStore = defineStore('run', () => {
     fetchPendingApproval,
     fetchStates,
     fetchArtifacts,
+    fetchPullRequests,
     loadArtifact,
     saveArtifact,
     submitApproval,

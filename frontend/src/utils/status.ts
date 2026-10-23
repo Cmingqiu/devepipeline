@@ -1,4 +1,12 @@
-import type { ArtifactKind, ProjectStatus, RequirementStatus, RunStatus, VersionSource } from '@/api/types'
+import type {
+  ArtifactKind,
+  ProjectStatus,
+  PullRequestProvider,
+  PullRequestStatus,
+  RequirementStatus,
+  RunStatus,
+  VersionSource,
+} from '@/api/types'
 
 type TagType = 'primary' | 'success' | 'warning' | 'info' | 'danger'
 
@@ -14,6 +22,23 @@ export const RUN_STATUS_META: Record<RunStatus, { label: string; type: TagType }
 export const ARTIFACT_KIND_META: Record<ArtifactKind, { label: string; type: TagType }> = {
   markdown: { label: 'Markdown', type: 'primary' },
   diff: { label: 'Diff', type: 'warning' },
+}
+
+export const PULL_REQUEST_PROVIDER_META: Record<
+  PullRequestProvider,
+  { label: string; type: TagType }
+> = {
+  github: { label: 'GitHub', type: 'primary' },
+  gitlab: { label: 'GitLab', type: 'warning' },
+}
+
+export const PULL_REQUEST_STATUS_META: Record<
+  PullRequestStatus,
+  { label: string; type: TagType }
+> = {
+  open: { label: '打开', type: 'primary' },
+  merged: { label: '已合并', type: 'success' },
+  closed: { label: '已关闭', type: 'info' },
 }
 
 export const REQUIREMENT_STATUS_META: Record<RequirementStatus, { label: string; type: TagType }> = {
@@ -55,4 +80,12 @@ export function runStatusMeta(status: RunStatus) {
 
 export function artifactKindMeta(kind: ArtifactKind) {
   return ARTIFACT_KIND_META[kind] ?? { label: kind, type: 'info' as TagType }
+}
+
+export function pullRequestProviderMeta(provider: PullRequestProvider) {
+  return PULL_REQUEST_PROVIDER_META[provider] ?? { label: provider, type: 'info' as TagType }
+}
+
+export function pullRequestStatusMeta(status: PullRequestStatus) {
+  return PULL_REQUEST_STATUS_META[status] ?? { label: status, type: 'info' as TagType }
 }

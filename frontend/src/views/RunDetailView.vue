@@ -10,6 +10,7 @@ import type { RunEvent, RunStage } from '@/api/types'
 import ApprovalPanel from '@/components/ApprovalPanel.vue'
 import ArtifactPanel from '@/components/ArtifactPanel.vue'
 import PipelineGraph from '@/components/PipelineGraph.vue'
+import PullRequestPanel from '@/components/PullRequestPanel.vue'
 import RunStateHistory from '@/components/RunStateHistory.vue'
 import RunStreamPanel from '@/components/RunStreamPanel.vue'
 import RunTimelinePanel from '@/components/RunTimelinePanel.vue'
@@ -53,6 +54,9 @@ const {
   },
   onArtifactSaved: () => {
     void store.fetchArtifacts(runId.value).catch(() => undefined)
+  },
+  onPullRequestCreated: () => {
+    void store.fetchPullRequests(runId.value).catch(() => undefined)
   },
 })
 
@@ -134,6 +138,7 @@ async function load(): Promise<void> {
       store.fetchPendingApproval(runId.value).catch(() => undefined),
       store.fetchStates(runId.value).catch(() => undefined),
       store.fetchArtifacts(runId.value).catch(() => undefined),
+      store.fetchPullRequests(runId.value).catch(() => undefined),
       seedHistory(),
     ])
     if (isActiveRunStatus(detail.status)) {
@@ -177,6 +182,7 @@ async function refreshFromStream(): Promise<void> {
     store.fetchPendingApproval(runId.value).catch(() => undefined),
     store.fetchStates(runId.value).catch(() => undefined),
     store.fetchArtifacts(runId.value).catch(() => undefined),
+    store.fetchPullRequests(runId.value).catch(() => undefined),
   ])
 }
 
@@ -411,6 +417,11 @@ async function retryRun(): Promise<void> {
       />
 
       <ArtifactPanel />
+
+      <PullRequestPanel
+        :pull-requests="store.pullRequests"
+        :loading="store.pullRequestsLoading"
+      />
 
       <RunStateHistory :states="store.states" :loading="store.statesLoading" />
     </template>

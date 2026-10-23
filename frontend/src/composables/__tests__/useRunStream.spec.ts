@@ -78,7 +78,7 @@ afterEach(() => {
 })
 
 describe('composables/useRunStream', () => {
-  it('建连时注册 10 种事件监听，并按阶段拼接 llm_token', () => {
+  it('建连时注册全部事件监听，并按阶段拼接 llm_token', () => {
     const stream = useRunStream(() => 7)
     stream.start()
 

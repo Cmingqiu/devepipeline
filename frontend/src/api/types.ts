@@ -161,6 +161,26 @@ export interface ArtifactDetail extends Artifact {
   content: string
 }
 
+export type PullRequestProvider = 'github' | 'gitlab'
+
+export type PullRequestStatus = 'open' | 'closed' | 'merged'
+
+/** 运行在 review 阶段创建的 PR */
+export interface PullRequest {
+  id: number
+  run_id: number
+  provider: PullRequestProvider
+  repo_full_name: string
+  number: number
+  url: string
+  branch: string
+  base_branch: string
+  head_sha: string | null
+  status: PullRequestStatus
+  created_at: string
+  updated_at: string
+}
+
 export type RunEventType =
   | 'run_started'
   | 'stage_started'
@@ -170,6 +190,7 @@ export type RunEventType =
   | 'progress'
   | 'usage'
   | 'artifact_saved'
+  | 'pull_request_created'
   | 'stage_finished'
   | 'interrupt'
   | 'decision'

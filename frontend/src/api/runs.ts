@@ -6,6 +6,7 @@ import type {
   ArtifactDetail,
   Page,
   PendingApproval,
+  PullRequest,
   Run,
   RunDetail,
   RunEvent,
@@ -90,6 +91,12 @@ export function submitApproval(
 export function listRunStates(runId: number, limit = 20): Promise<RunState[]> {
   return http
     .get<RunState[]>(`/runs/${runId}/states`, { params: { limit } })
+    .then((response) => response.data)
+}
+
+export function listPullRequests(runId: number): Promise<PullRequest[]> {
+  return http
+    .get<PullRequest[]>(`/runs/${runId}/pull-requests`)
     .then((response) => response.data)
 }
 

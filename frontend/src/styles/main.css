@@ -733,6 +733,50 @@ a {
   font-size: 12px;
 }
 
+.pr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pr-item {
+  padding: 10px 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+}
+
+.pr-item__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pr-item__number {
+  font-weight: 600;
+  color: var(--app-text-secondary);
+}
+
+.pr-item__meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+
+.pr-item__link {
+  display: inline-block;
+  max-width: 100%;
+  margin-top: 6px;
+  overflow: hidden;
+  color: #409eff;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- 流水线图 / 实时面板 / 时间线 ---------- */
 
 .pipeline-graph {

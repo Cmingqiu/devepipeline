@@ -11,6 +11,7 @@ export const RUN_EVENT_TYPES: RunEventType[] = [
   'progress',
   'usage',
   'artifact_saved',
+  'pull_request_created',
   'stage_finished',
   'interrupt',
   'decision',
@@ -26,6 +27,7 @@ export interface RunStreamCallbacks {
   onInterrupt?: (event: RunEvent) => void
   onDecision?: (event: RunEvent) => void
   onArtifactSaved?: (event: RunEvent) => void
+  onPullRequestCreated?: (event: RunEvent) => void
   onStreamError?: (event: RunEvent) => void
   onRunFinished?: (event: RunEvent) => void
 }
@@ -205,6 +207,9 @@ export function useRunStream(
         break
       case 'artifact_saved':
         callbacks.onArtifactSaved?.(event)
+        break
+      case 'pull_request_created':
+        callbacks.onPullRequestCreated?.(event)
         break
       case 'error':
         callbacks.onStreamError?.(event)

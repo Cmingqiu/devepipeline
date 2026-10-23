@@ -1,5 +1,6 @@
-import type { RunEvent, RunEventType } from '@/api/types'
+import type { PullRequestProvider, RunEvent, RunEventType } from '@/api/types'
 import { stageLabel } from './stage'
+import { pullRequestProviderMeta } from './status'
 
 export type EventTone = 'default' | 'info' | 'success' | 'warning' | 'danger'
 
@@ -12,6 +13,7 @@ export const RUN_EVENT_META: Record<RunEventType, { label: string; tone: EventTo
   progress: { label: '进度', tone: 'info' },
   usage: { label: '用量', tone: 'info' },
   artifact_saved: { label: '产物保存', tone: 'success' },
+  pull_request_created: { label: 'PR 创建', tone: 'success' },
   stage_finished: { label: '阶段完成', tone: 'success' },
   interrupt: { label: '等待审批', tone: 'warning' },
   decision: { label: '审批决策', tone: 'info' },
@@ -84,6 +86,20 @@ export function formatEventSummary(
       const versionText = version !== null ? ` v${version}` : ''
       const kindText = kind ? ` ${kind}` : ''
       return summary ? `${prefix}${versionText}${kindText}：${summary}` : `${prefix}${versionText}${kindText}`
+    }
+    case 'pull_request_created': {
+      const provider = text(payload.provider)
+      const providerLabel = provider
+        ? pullRequestProviderMeta(provider as PullRequestProvider).label
+        : ''
+      const number = num(payload.number)
+      const branch = text(payload.branch)
+      const baseBranch = text(payload.base_branch)
+      const route = branch && baseBranch ? `${branch} → ${baseBranch}` : branch || baseBranch
+      const head = [providerLabel, number !== null ? `PR #${number}` : 'PR']
+        .filter(Boolean)
+        .join(' ')
+      return route ? `${head}：${route}` : head
     }
     case 'stage_finished': {
       const stage = stageLabel(text(payload.stage))
