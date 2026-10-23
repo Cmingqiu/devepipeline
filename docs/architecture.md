@@ -302,11 +302,10 @@ worker 只订阅 `astream_events(..., version="v2")`，再翻译成统一信封�
 
 ### 4.1 关系图
 
-> 落地状态（2026-10-23）：下图是**目标模型**。当前已建 15 张表（projects / requirements /
+> 落地状态（2026-10-23）：下图是**目标模型**。当前已建 17 张表（projects / requirements /
 > requirement_versions / pipeline_runs / stage_runs / artifacts / stage_approvals / run_events /
-> agent_docs / skills / skill_files / mcp_configs / credentials / code_workspaces / pull_requests）。
-> `llm_providers`、`model_bindings`（多 provider、每阶段模型）尚未建，
-> 当前由环境变量提供单一 provider。
+> agent_docs / skills / skill_files / mcp_configs / credentials / code_workspaces / pull_requests /
+> llm_providers / model_bindings）。
 
 ```mermaid
 erDiagram
@@ -723,12 +722,12 @@ erDiagram
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/providers` | provider 列表；`api_key` 只回 `configured: true/false` |
-| POST | `/api/v1/providers` | `{name, endpoint, model, api_key?, extra?}`；env 与 DB 二选一 |
-| PATCH | `/api/v1/providers/{provider_id}` | 改 endpoint/model/extra/enabled |
+| GET | `/api/v1/providers` | provider 列表；`api_key` 只回 `configured: true/false` 与末 4 位 hint |
+| POST | `/api/v1/providers` | `{name, endpoint, model, api_key?, extra?, enabled?}`；api_key 加密入库，不填则读 `LLM_KEY_<NAME>` |
+| PATCH | `/api/v1/providers/{provider_id}` | 改 name/endpoint/model/extra/enabled；api_key 留空表示不修改 |
 | DELETE | `/api/v1/providers/{provider_id}` | 被 model_bindings 引用时 409 |
-| GET | `/api/v1/model-bindings` | `?project_id=` 返回 global + project 两层的合并视图与来源 |
-| PUT | `/api/v1/model-bindings` | `{scope, project_id?, stage, provider_id, model?, params?}` 批量 upsert |
+| GET | `/api/v1/model-bindings` | `?project_id=` 返回 4 条生效视图（project/global/env 来源 + 项目层原始覆盖值 override_*） |
+| PUT | `/api/v1/model-bindings` | `{scope, project_id?, items:[{stage, provider_id, model?, params?}]}`：整体替换该 scope，未出现=解绑，返回生效视图 |
 | GET | `/api/v1/pipelines/graph` | 节点/边定义（id/label/stage/order），前端画图用；状态由 run 数据叠加 |
 
 合计 59 个端点（不含 OpenAPI 文档本身）。
@@ -812,6 +811,10 @@ composables：
 ## 7. 配置：LLM 提供商与每阶段模型
 
 ### 7.1 配置形态（沿用项目既有写法）
+
+> 落地状态（2026-10-23）：`llm_providers` 与 `model_bindings` 已建（迁移 `a7c9e1f3b5d7`），
+> provider CRUD、每阶段绑定与运行时构造均已实现；下文是目标语义，实现细节见
+> `app/services/provider_service.py` 与 `app/agents/model_registry.py`。
 
 ```python
 LLM_PROVIDERS = {
@@ -1013,6 +1016,13 @@ curl -s -X POST localhost:8000/api/v1/projects/1/mcp/test -H 'content-type: appl
 # 期望：{"results":[{"name":"fs","ok":true,"tools":[...]}]}
 ```
 恶意 zip（`../../evil.sh`）必须被拒绝并 400，且磁盘上无残留文件。
+
+多 provider / 每阶段模型（M4 收尾）：
+```bash
+conda run -n devpipeline pytest tests/integration/pg/test_providers_api.py -q        # provider CRUD / 绑定解析 / 409
+conda run -n devpipeline pytest tests/integration/pg/test_model_bindings_pipeline.py -q  # 绑定生效 + 快照无密钥
+conda run -n devpipeline pytest tests/unit/test_provider_config.py -q                # 归一化 / env key 名 / 构造
+```
 
 ### M5 编码沙箱 + PR 评审
 

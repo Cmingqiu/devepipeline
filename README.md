@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 / M2 / M3 / M4 完成；M5 沙箱 + PR + 工作区清理完成**。剩余：Docker 沙箱模式、多 provider / 每阶段模型、GitLab PR。
+当前进度：**M1 / M2 / M3 / M4 完成；M5 沙箱 + PR + 工作区清理完成**。剩余：Docker 沙箱模式、GitLab PR。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -159,6 +159,12 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
   `read_skill_file`（按需读技能包脚本），工具名加 server 前缀；编码节点最多 6 轮工具循环，
   工具事件经 `get_stream_writer()` → custom 流 → SSE 实时推送；加载失败/超时降级为无工具并把原因写进时间线。
 - 前端：`/projects/:id/settings` 四个 Tab（AGENTS.md 编辑与版本、Skills 上传/文件树预览、MCP JSON 编辑与测试、仓库与凭证），凭证只显示 hint；运行时间线展示工具调用与结果。
+- 多 provider / 每阶段模型：`llm_providers`（迁移 `a7c9e1f3b5d7`，OpenAI 兼容端点，密钥加密存 `credentials` 或读
+  `LLM_KEY_<NAME>`）+ `model_bindings`（global/project 两层，按 stage 绑定 provider/model/params）。
+  解析顺序：project 绑定 → global 绑定 → 环境变量默认；启动 run 前校验每阶段都能拿到 key（缺了直接 422）。
+  绑定快照在 run 初始化时冻结进 state（**只含 endpoint/model/params/credential_id，不含密钥**），
+  执行器按快照构造模型并注册到进程内 registry，节点按 run_id 取；`stage_runs.provider/model` 记录实际使用的模型。
+  前端设置页新增「模型」Tab：provider 增删改（api_key 只写、只回 hint）、四阶段绑定与来源徽标。
 - 事件落库修复：`close()` 取消在途 flush 会整批丢事件（实测丢 `interrupt`），改为取消时把批次放回缓冲并等任务退出。
 
 ## M5 已实现（编码沙箱 + GitHub PR）
@@ -187,9 +193,8 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 
 ## 未实现（后续里程碑）
 
+- M4 剩余：技能仍以 SKILL.md 全量注入为主，`read_skill_file` 只覆盖额外脚本/资料。
 - M5 剩余：Docker 沙箱模式；PR 状态（merged/closed）只在建 PR 时写入，没有轮询刷新。
-- M4 剩余：多 provider / 每阶段模型选择（`llm_providers` / `model_bindings` 表尚未建，当前走环境变量单一 provider）；
-  技能仍以 SKILL.md 全量注入为主，`read_skill_file` 只覆盖额外脚本/资料。
 - GitLab：`VcsClient` 已抽象，`build_vcs_client` 对 gitlab 直接抛错，实现待补。
 
 ## 已知约束（踩过的坑，别再踩）
@@ -223,5 +228,7 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | PR 失败不能阻断评审 | 推送/API 失败只发 `error(pr_unavailable)` 并继续本地 diff 评审；PR 是交付物不是前置条件 |
 | 暂停/取消只能在节点边界生效 | 进程内队列无法强杀正在跑的协程；DB `status` 是唯一控制通道，每个 `updates` 边界必查 |
 | fork 入口用 `aupdate_state(as_node=前一个 gate)` | `Command(goto=...)` 作为图输入在 LangGraph 1.1.6 实测被忽略（从 START 重跑并覆盖 seed）；只有 `as_node` 能让新 thread 的 next 指向 `from_stage` 节点 |
+| 模型绑定快照不含密钥 | 绑定冻结进 state/checkpoint，但 `api_key` 只在运行时从 credential 解密或读 `LLM_KEY_<NAME>`；密钥进 checkpoint 等于明文落 PG |
+| 测试要隔离用户的 global 绑定 | 测试库与用户库共用；conftest 的 autouse fixture 把 `resolve_project_bindings` 置空，验证绑定的用例用 `real_model_bindings` 恢复 |
 | workspace 清理只允许终态 | 等审批/运行中的目录还要被 resume 复用，删了等于抽走正在用的沙箱；自动路径只在 `succeeded` 执行 |
 | 保留期清理要扫孤儿目录 | run 行被删后目录没人认领，只按 DB 行清会永久残留；按目录 mtime 扫并顺手清 |
