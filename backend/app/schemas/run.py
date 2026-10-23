@@ -143,3 +143,7 @@ class PullRequestOut(BaseModel):
     status: str
     created_at: UtcDatetime
     updated_at: UtcDatetime
+
+
+class WorkspaceCleanupOut(BaseModel):
+    removed: int

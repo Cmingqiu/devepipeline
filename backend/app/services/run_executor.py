@@ -628,6 +628,20 @@ async def _finalize(run_id: int, graph, config: dict, events: EventLogger) -> No
     if status == "waiting_approval":
         # 等人工审批不是结束：只有 interrupt 事件，不发 run_finished（否则前端会关掉连接）
         return
+    if status == "succeeded" and get_settings().workspace_cleanup_on_success:
+        # 成功即清：diff 已进 artifact，目录再留着只占磁盘。失败/取消保留便于排查。
+        try:
+            from app.services.workspace_service import cleanup_run_workspaces
+
+            removed = await cleanup_run_workspaces(run_id, only_if_succeeded=True)
+            if removed:
+                await events.emit(
+                    "progress",
+                    {"message": f"已清理 {len(removed)} 个沙箱工作区", "cleaned_workspaces": removed},
+                    stage=None,
+                )
+        except Exception:  # 清理失败不能影响 run 收尾
+            logger.exception("workspace_cleanup_error", extra={"run_id": run_id})
     if status == "failed" and error_code:
         await events.emit(
             "error",

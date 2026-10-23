@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     sandbox_enabled: bool = True
     workspaces_dir: str = "workspaces"
     sandbox_command_timeout: int = 120
+    # 工作区清理：成功即清；失败/取消保留便于排查，由保留期兜底（worker 每日跑）
+    workspace_cleanup_on_success: bool = True
+    workspace_retention_days: int = 7
 
     # GitHub PR（M5）：企业版改这里，测试用 respx 拦截同一个 base
     github_api_base: str = "https://api.github.com"

@@ -18,9 +18,10 @@ from app.schemas.run import (
     RunDetail,
     RunOut,
     StateSummary,
+    WorkspaceCleanupOut,
     WorkspaceOut,
 )
-from app.services import run_service
+from app.services import run_service, workspace_service
 
 router = APIRouter(tags=["runs"])
 
@@ -102,6 +103,17 @@ async def list_workspaces(session: SessionDep, run_id: int) -> list[WorkspaceOut
         .all()
     )
     return [WorkspaceOut.model_validate(row) for row in rows]
+
+
+@router.delete(
+    "/runs/{run_id}/workspaces",
+    response_model=WorkspaceCleanupOut,
+    summary="清理该运行的沙箱工作区（只允许终态运行）",
+)
+async def cleanup_workspaces(session: SessionDep, run_id: int) -> WorkspaceCleanupOut:
+    await run_service.get_run(session, run_id, reconcile=False)
+    removed = await workspace_service.cleanup_run_workspaces(run_id)
+    return WorkspaceCleanupOut(removed=len(removed))
 
 
 @router.get(
