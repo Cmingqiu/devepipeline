@@ -10,6 +10,9 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+QUEUE_NAME = "devpipeline"
+HEALTH_KEY = "devpipeline:health"
+
 _pool: ArqRedis | None = None
 _lock = asyncio.Lock()
 
@@ -23,7 +26,7 @@ async def get_arq_pool() -> ArqRedis:
             settings = get_settings()
             _pool = await create_pool(
                 RedisSettings.from_dsn(settings.redis_url),
-                default_queue_name="devpipeline",
+                default_queue_name=QUEUE_NAME,
             )
             logger.info("arq_pool_ready")
         return _pool
@@ -36,15 +39,27 @@ async def close_arq_pool() -> None:
     _pool = None
 
 
+async def worker_healthy() -> bool:
+    """worker 每 health_check_interval 刷新一次带 TTL 的心跳键；键不在 = 没有 worker 在消费。"""
+    pool = await get_arq_pool()
+    return bool(await pool.exists(HEALTH_KEY))
+
+
 async def enqueue_run(
-    run_id: int, *, resume_payload: dict | None = None, continue_run: bool = False
-) -> str:
-    """把一次执行/恢复丢给 arq worker，返回 job id。"""
+    run_id: int,
+    *,
+    resume_payload: dict | None = None,
+    continue_run: bool = False,
+    job_id: str,
+) -> str | None:
+    """入队；job_id 相同视为重复投递，返回 None（不抛异常、也不重复执行）。"""
     pool = await get_arq_pool()
     if resume_payload is not None:
-        job = await pool.enqueue_job("resume_pipeline", run_id, resume_payload)
+        job = await pool.enqueue_job(
+            "resume_pipeline", run_id, resume_payload, _job_id=job_id
+        )
     else:
-        job = await pool.enqueue_job("run_pipeline", run_id, continue_run)
-    if job is None:
-        raise RuntimeError(f"arq 拒绝入队 run={run_id}（job id 冲突）")
-    return job.job_id
+        job = await pool.enqueue_job(
+            "run_pipeline", run_id, continue_run, _job_id=job_id
+        )
+    return job.job_id if job is not None else None

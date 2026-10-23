@@ -36,6 +36,9 @@ class WorkerSettings:
     queue_name = "devpipeline"
     on_startup = on_startup
     on_shutdown = on_shutdown
+    # 心跳键：api 用它判断「有没有 worker 在消费」，没有就回退进程内执行
+    health_check_key = "devpipeline:health"
+    health_check_interval = 30
     max_jobs = 2
     job_timeout = 3600
     keep_result = 600

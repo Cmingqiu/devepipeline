@@ -56,6 +56,8 @@ conda run -n devpipeline python main.py
 conda run -n devpipeline python worker.py
 #   为什么不用 `arq app.worker.main.WorkerSettings`：`python -m arq` 自建事件循环，
 #   Windows 上是 Proactor，psycopg 会直接报错；worker.py 先在建 loop 前钉死 selector。
+#   worker 不在时后端会检测心跳缺失并回退进程内执行（run 不会卡在「排队中」），
+#   但日志会打 worker_absent_fallback_inline；长期使用请把 worker 起上。
 
 # 4) 前端（另一个终端，127.0.0.1:5173，/api 已代理到 8000）
 cd frontend
@@ -160,3 +162,5 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | checkpointer 用连接池，不开 pipeline | `AsyncPostgresSaver` 对 `AsyncConnectionPool + pipe` 直接 raise，二者互斥 |
 | `get_checkpointer()` 必须加锁 | 启动兜底与执行器会并发初始化，实测会建出两个池并泄漏 psycopg worker 任务 |
 | Windows 事件循环统一 selector | M2 的 psycopg 不支持 Proactor；`backend/main.py` 入口在 uvicorn 建 loop 前设置（`app/core/server.py`） |
+| worker 心跳 `devpipeline:health` | 每 30 s 刷新；api 入队前检查心跳，没有就回退进程内执行，否则 run 会永远停在「排队中」（2026-10-23 实测） |
+| arq job id 必须确定性 | `run:{id}:start` / `run:{id}:continue` / `run:{id}:resume:{payload hash}`；否则双击启动或 api 重启 requeue 会让**两个 worker 同时跑同一个 run**（实测产生两个 analysis artifact、事件翻倍） |

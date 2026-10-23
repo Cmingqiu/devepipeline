@@ -286,7 +286,10 @@ async def retry_run(session: AsyncSession, run_id: int) -> PipelineRun:
     run.finished_at = None
     run.updated_at = utcnow()
     await session.commit()
-    await dispatcher.enqueue_run(run.id, continue_run=True)
+    # 手动重试是用户明确动作，用一次性 dedupe key，别被上一次 continue 的 job id 拦住
+    await dispatcher.enqueue_run(
+        run.id, continue_run=True, dedupe_key=f"retry:{uuid4().hex[:8]}"
+    )
     return run
 
 
