@@ -58,6 +58,9 @@ const {
   onPullRequestCreated: () => {
     void store.fetchPullRequests(runId.value).catch(() => undefined)
   },
+  onRunPaused: () => {
+    void handleRunPaused()
+  },
 })
 
 const liveStage = computed<RunStage | null>(() => {
@@ -83,6 +86,10 @@ const streamText = computed(() => {
 const canCancel = computed(() =>
   store.detail ? isActiveRunStatus(store.detail.status) : false,
 )
+const canPause = computed(
+  () => store.detail?.status === 'queued' || store.detail?.status === 'running',
+)
+const canResume = computed(() => store.detail?.status === 'paused')
 const canRetry = computed(
   () => store.detail?.status === 'failed' || store.detail?.status === 'cancelled',
 )
@@ -211,6 +218,18 @@ async function handleDecided(): Promise<void> {
   await refreshFromStream()
 }
 
+/**
+ * run_paused 是流停止事件。但存在「暂停后立即继续」的竞态：旧执行器仍会在节点边界发
+ * run_paused，而此时后端状态可能已被 resume 改回 running。以后端 detail 为准，若仍在
+ * 运行就重开流，否则停在 paused。
+ */
+async function handleRunPaused(): Promise<void> {
+  await refreshFromStream()
+  if (store.detail && isActiveRunStatus(store.detail.status)) {
+    startStream()
+  }
+}
+
 async function handleSelectStage(stage: RunStage): Promise<void> {
   const candidates = store.artifacts.filter((artifact) => artifact.stage === stage)
   if (candidates.length === 0) {
@@ -252,6 +271,28 @@ async function cancelRun(): Promise<void> {
     }
   } catch (err) {
     ElMessage.error(getErrorMessage(err, '取消运行失败'))
+  }
+}
+
+async function pauseRun(): Promise<void> {
+  try {
+    await store.pause(runId.value)
+    ElMessage.success('已请求暂停，将在当前节点结束后生效')
+    // 流保持连接：执行器在节点边界发 run_paused，收到后再关闭并发一次事件
+    await refreshFromStream()
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '暂停运行失败'))
+  }
+}
+
+async function resumeRun(): Promise<void> {
+  try {
+    await store.resume(runId.value)
+    ElMessage.success('已继续运行')
+    store.stopPolling()
+    startStream()
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '继续运行失败'))
   }
 }
 
@@ -305,6 +346,18 @@ async function retryRun(): Promise<void> {
 
           <div class="page-actions">
             <el-button :icon="Refresh" :loading="refreshing" @click="refreshAll">刷新</el-button>
+            <el-button v-if="canPause" :loading="store.pausing" @click="pauseRun">
+              暂停
+            </el-button>
+            <el-button
+              v-if="canResume"
+              type="primary"
+              plain
+              :loading="store.resuming"
+              @click="resumeRun"
+            >
+              继续
+            </el-button>
             <el-button v-if="canCancel" :loading="store.cancelling" @click="cancelRun">
               取消运行
             </el-button>
@@ -423,7 +476,11 @@ async function retryRun(): Promise<void> {
         :loading="store.pullRequestsLoading"
       />
 
-      <RunStateHistory :states="store.states" :loading="store.statesLoading" />
+      <RunStateHistory
+        :states="store.states"
+        :run-id="store.detail.id"
+        :loading="store.statesLoading"
+      />
     </template>
 
     <div v-else-if="!store.detailLoading" class="surface">

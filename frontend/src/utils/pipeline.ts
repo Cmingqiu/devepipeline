@@ -1,7 +1,13 @@
 import type { PendingApproval, RunStage, RunStatus } from '@/api/types'
 import { PIPELINE_STAGES, stageIndex } from './stage'
 
-export type PipelineNodeStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed'
+export type PipelineNodeStatus =
+  | 'pending'
+  | 'running'
+  | 'paused'
+  | 'waiting'
+  | 'done'
+  | 'failed'
 
 export type PipelineNodeKind = 'stage' | 'gate'
 
@@ -80,6 +86,11 @@ function stageNodeStatus(
       if (index < activeIndex) return 'done'
       if (index === activeIndex) return 'running'
       return 'pending'
+    case 'paused':
+      if (activeIndex < 0) return index === 0 ? 'paused' : 'pending'
+      if (index < activeIndex) return 'done'
+      if (index === activeIndex) return 'paused'
+      return 'pending'
     default:
       return 'pending'
   }
@@ -105,6 +116,8 @@ function gateNodeStatus(
       return 'pending'
     case 'running':
       return activeIndex >= 0 && index < activeIndex ? 'done' : 'pending'
+    case 'paused':
+      return activeIndex >= 0 && index < activeIndex ? 'done' : 'pending'
     default:
       return 'pending'
   }
@@ -113,6 +126,7 @@ function gateNodeStatus(
 export const PIPELINE_NODE_STATUS_LABEL: Record<PipelineNodeStatus, string> = {
   pending: '待执行',
   running: '运行中',
+  paused: '已暂停',
   waiting: '等待审批',
   done: '已完成',
   failed: '失败',

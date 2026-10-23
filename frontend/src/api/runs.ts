@@ -10,6 +10,7 @@ import type {
   Run,
   RunDetail,
   RunEvent,
+  RunStage,
   RunState,
   RunStatus,
 } from './types'
@@ -25,6 +26,11 @@ export interface RunListParams {
 export interface RunCreatePayload {
   version_no?: number
   max_review_rounds?: number
+}
+
+export interface RunForkPayload {
+  checkpoint_id: string
+  from_stage?: RunStage
 }
 
 export interface ArtifactListParams {
@@ -67,6 +73,23 @@ export function cancelRun(runId: number): Promise<Run> {
 
 export function retryRun(runId: number): Promise<Run> {
   return http.post<Run>(`/runs/${runId}/retry`).then((response) => response.data)
+}
+
+/** 请求暂停：在当前节点结束后生效，等待审批时后端返回 409 */
+export function pauseRun(runId: number): Promise<Run> {
+  return http.post<Run>(`/runs/${runId}/pause`).then((response) => response.data)
+}
+
+/** 继续已暂停的运行；非 paused 时后端返回 409 */
+export function resumeRun(runId: number): Promise<Run> {
+  return http.post<Run>(`/runs/${runId}/resume`).then((response) => response.data)
+}
+
+/** 从指定 checkpoint 分叉出新运行，原 run 不受影响 */
+export function forkRun(runId: number, payload: RunForkPayload): Promise<Run> {
+  return http
+    .post<Run>(`/runs/${runId}/fork`, payload)
+    .then((response) => response.data)
 }
 
 /** 无待审批时后端返回 204，这里归一化为 null（不是错误） */

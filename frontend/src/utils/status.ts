@@ -13,6 +13,7 @@ type TagType = 'primary' | 'success' | 'warning' | 'info' | 'danger'
 export const RUN_STATUS_META: Record<RunStatus, { label: string; type: TagType }> = {
   queued: { label: '排队中', type: 'info' },
   running: { label: '运行中', type: 'primary' },
+  paused: { label: '已暂停', type: 'warning' },
   waiting_approval: { label: '待审批', type: 'warning' },
   succeeded: { label: '成功', type: 'success' },
   failed: { label: '失败', type: 'danger' },

@@ -718,6 +718,10 @@ a {
   flex-wrap: wrap;
 }
 
+.state-item__fork {
+  margin-left: auto;
+}
+
 .state-item__meta {
   display: flex;
   gap: 12px;
@@ -731,6 +735,17 @@ a {
   margin: 6px 0 0;
   color: #f56c6c;
   font-size: 12px;
+}
+
+.state-fork__checkpoint {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.state-fork__stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .pr-list {
@@ -849,6 +864,15 @@ a {
 
 .pipeline-node--running .pipeline-node__status {
   color: #409eff;
+}
+
+.pipeline-node--paused {
+  background: #fffaf0;
+  border-color: #e6a23c;
+}
+
+.pipeline-node--paused .pipeline-node__status {
+  color: #e6a23c;
 }
 
 .pipeline-node--waiting {

@@ -3,7 +3,12 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import * as runsApi from '@/api/runs'
-import type { ArtifactListParams, RunCreatePayload, RunListParams } from '@/api/runs'
+import type {
+  ArtifactListParams,
+  RunCreatePayload,
+  RunForkPayload,
+  RunListParams,
+} from '@/api/runs'
 import type {
   ApprovalPayload,
   ApprovalResult,
@@ -50,6 +55,9 @@ export const useRunStore = defineStore('run', () => {
   const approving = ref(false)
   const cancelling = ref(false)
   const retrying = ref(false)
+  const pausing = ref(false)
+  const resuming = ref(false)
+  const forking = ref(false)
 
   const polling = ref(false)
   const pollingPaused = ref(false)
@@ -249,6 +257,42 @@ export const useRunStore = defineStore('run', () => {
     }
   }
 
+  async function pause(runId: number): Promise<Run> {
+    pausing.value = true
+    try {
+      const run = await runsApi.pauseRun(runId)
+      await fetchDetail(runId, { silent: true }).catch(() => undefined)
+      return run
+    } finally {
+      pausing.value = false
+    }
+  }
+
+  async function resume(runId: number): Promise<Run> {
+    resuming.value = true
+    try {
+      const run = await runsApi.resumeRun(runId)
+      await fetchDetail(runId, { silent: true }).catch(() => undefined)
+      await fetchStates(runId).catch(() => undefined)
+      if (detail.value && isActiveRunStatus(detail.value.status)) {
+        startPolling(runId)
+      }
+      return run
+    } finally {
+      resuming.value = false
+    }
+  }
+
+  /** 分叉返回的是新 run，不刷新当前 run 的 detail */
+  async function fork(runId: number, payload: RunForkPayload): Promise<Run> {
+    forking.value = true
+    try {
+      return await runsApi.forkRun(runId, payload)
+    } finally {
+      forking.value = false
+    }
+  }
+
   function clearPollTimer(): void {
     if (pollTimer !== null) {
       clearTimeout(pollTimer)
@@ -355,6 +399,9 @@ export const useRunStore = defineStore('run', () => {
     approving,
     cancelling,
     retrying,
+    pausing,
+    resuming,
+    forking,
     polling,
     pollingPaused,
     isEmpty,
@@ -371,6 +418,9 @@ export const useRunStore = defineStore('run', () => {
     submitApproval,
     cancel,
     retry,
+    pause,
+    resume,
+    fork,
     startPolling,
     stopPolling,
     pausePolling,

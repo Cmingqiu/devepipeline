@@ -91,6 +91,42 @@ describe('utils/events 时间线格式化', () => {
     )
   })
 
+  it('暂停/继续/fork 事件的标签、tone 与摘要', () => {
+    expect(eventTypeLabel('run_pausing')).toBe('暂停中')
+    expect(eventTypeLabel('run_paused')).toBe('已暂停')
+    expect(eventTypeLabel('run_resumed')).toBe('已继续')
+    expect(eventTypeLabel('forked')).toBe('已 fork')
+
+    expect(eventTone('run_pausing')).toBe('warning')
+    expect(eventTone('run_paused')).toBe('warning')
+    expect(eventTone('run_resumed')).toBe('info')
+    expect(eventTone('forked')).toBe('info')
+
+    expect(formatEventSummary('run_pausing')).toBe(
+      '已请求暂停，将在当前节点结束后生效',
+    )
+    expect(formatEventSummary('run_paused')).toBe('已暂停')
+    expect(
+      formatEventSummary('run_paused', {
+        status: 'paused',
+        checkpoint_id: 'checkpoint-abcdef123456',
+      }),
+    ).toBe('已暂停（checkpoint checkpoi）')
+    expect(formatEventSummary('run_resumed')).toBe('继续运行（running）')
+    expect(
+      formatEventSummary('forked', {
+        source_run_id: 7,
+        checkpoint_id: 'abcdef1234567890',
+        from_stage: 'coding',
+      }),
+    ).toBe('源自运行 #7（abcdef12），起始阶段：编码')
+    // 缺字段不崩
+    expect(formatEventSummary('forked')).toBe('从 checkpoint fork')
+    expect(formatEventSummary('forked', { from_stage: 'unknown_stage' })).toBe(
+      '从 checkpoint fork，起始阶段：unknown_stage',
+    )
+  })
+
   it('时间格式化与 stage 标签', () => {
     expect(formatEventTime('2026-10-21T06:00:00.000Z')).toMatch(/^\d{2}:\d{2}:\d{2}$/)
     expect(formatEventTime('not-a-date')).toBe('-')

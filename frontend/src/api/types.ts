@@ -73,6 +73,7 @@ export interface RequirementVersionDetail extends RequirementVersion {
 export type RunStatus =
   | 'queued'
   | 'running'
+  | 'paused'
   | 'waiting_approval'
   | 'succeeded'
   | 'failed'
@@ -183,6 +184,10 @@ export interface PullRequest {
 
 export type RunEventType =
   | 'run_started'
+  | 'run_pausing'
+  | 'run_paused'
+  | 'run_resumed'
+  | 'forked'
   | 'stage_started'
   | 'llm_token'
   | 'tool_started'

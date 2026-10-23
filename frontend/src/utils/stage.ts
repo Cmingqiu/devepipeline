@@ -104,6 +104,19 @@ export function buildStageSteps(
       return wait
     }
 
+    if (status === 'paused') {
+      if (index < 0) {
+        return wait
+      }
+      if (i < index) {
+        return finish
+      }
+      if (i === index) {
+        return { ...base, status: 'process' as const, tone: null, description: '已暂停' }
+      }
+      return wait
+    }
+
     if (status === 'running') {
       if (index < 0) {
         return i === 0

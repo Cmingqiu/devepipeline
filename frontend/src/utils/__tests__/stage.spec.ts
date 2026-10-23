@@ -8,7 +8,7 @@ import {
   stageLabel,
 } from '@/utils/stage'
 
-function statusesOf(status: 'waiting_approval' | 'failed' | 'succeeded' | 'running' | 'queued' | 'cancelled', stage: 'analysis' | 'design' | 'coding' | 'review' | null) {
+function statusesOf(status: 'waiting_approval' | 'failed' | 'succeeded' | 'running' | 'queued' | 'cancelled' | 'paused', stage: 'analysis' | 'design' | 'coding' | 'review' | null) {
   return buildStageSteps(status, stage).map((step) => step.status)
 }
 
@@ -52,6 +52,13 @@ describe('utils/stage 阶段状态推导', () => {
 
     expect(steps.map((step) => step.status)).toEqual(['finish', 'finish', 'finish', 'process'])
     expect(steps[3]?.tone).toBe('approval')
+  })
+
+  it('paused@coding：前两步完成，coding 标记已暂停，review 未执行', () => {
+    const steps = buildStageSteps('paused', 'coding')
+
+    expect(steps.map((step) => step.status)).toEqual(['finish', 'finish', 'process', 'wait'])
+    expect(steps[2]?.description).toBe('已暂停')
   })
 
   it('activeStageIndex 与后端 current_stage 对齐', () => {

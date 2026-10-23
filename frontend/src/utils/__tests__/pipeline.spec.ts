@@ -65,6 +65,18 @@ describe('utils/pipeline 流水线图节点状态', () => {
     expect(Object.values(map)).toEqual(Array(8).fill('done'))
   })
 
+  it('paused@coding：coding 标记已暂停，之后节点未执行', () => {
+    const map = statusMap(
+      buildPipelineNodes({ status: 'paused', currentStage: 'coding' }),
+    )
+
+    expect(map['stage-analysis']).toBe('done')
+    expect(map['gate-design']).toBe('done')
+    expect(map['stage-coding']).toBe('paused')
+    expect(map['gate-coding']).toBe('pending')
+    expect(map['stage-review']).toBe('pending')
+  })
+
   it('其余状态：queued 全部待执行，cancelled 保留已完成节点', () => {
     const queued = statusMap(
       buildPipelineNodes({ status: 'queued', currentStage: null }),

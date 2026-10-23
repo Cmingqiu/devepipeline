@@ -10,6 +10,9 @@ vi.mock('@/api/runs', () => ({
   createRun: vi.fn(),
   cancelRun: vi.fn(),
   retryRun: vi.fn(),
+  pauseRun: vi.fn(),
+  resumeRun: vi.fn(),
+  forkRun: vi.fn(),
   getPendingApproval: vi.fn(),
   submitApproval: vi.fn(),
   listRunStates: vi.fn(),
@@ -179,5 +182,61 @@ describe('stores/run 审批与轮询', () => {
 
     expect(store.pendingApproval).toEqual(pending)
     expect(store.polling).toBe(false)
+  })
+
+  it('pause 调用接口后刷新 detail', async () => {
+    mockedApi.getRun.mockResolvedValue(makeRun({ status: 'running' }))
+    mockedApi.pauseRun.mockResolvedValue(makeRun({ status: 'running' }))
+
+    const store = useRunStore()
+    await store.fetchDetail(1)
+
+    const run = await store.pause(1)
+
+    expect(mockedApi.pauseRun).toHaveBeenCalledWith(1)
+    expect(run.status).toBe('running')
+    expect(store.detail?.status).toBe('running')
+    expect(store.pausing).toBe(false)
+  })
+
+  it('resume 调用接口后刷新 detail 并恢复轮询', async () => {
+    mockedApi.getRun.mockResolvedValue(makeRun({ status: 'paused', current_stage: 'coding' }))
+
+    const store = useRunStore()
+    await store.fetchDetail(1)
+    expect(store.detail?.status).toBe('paused')
+    expect(store.polling).toBe(false)
+
+    mockedApi.resumeRun.mockResolvedValue(makeRun({ status: 'running', current_stage: 'coding' }))
+    mockedApi.getRun.mockResolvedValue(makeRun({ status: 'running', current_stage: 'coding' }))
+
+    const run = await store.resume(1)
+
+    expect(mockedApi.resumeRun).toHaveBeenCalledWith(1)
+    expect(run.status).toBe('running')
+    expect(store.detail?.status).toBe('running')
+    expect(store.resuming).toBe(false)
+    expect(store.polling).toBe(true)
+    store.stopPolling()
+  })
+
+  it('fork 返回新 run，且不刷新当前 run 的 detail', async () => {
+    const newRun = makeRun({ id: 9, status: 'queued', current_stage: null })
+    mockedApi.getRun.mockResolvedValue(makeRun())
+    mockedApi.forkRun.mockResolvedValue(newRun)
+
+    const store = useRunStore()
+    await store.fetchDetail(1)
+
+    const run = await store.fork(1, { checkpoint_id: 'cp-1', from_stage: 'coding' })
+
+    expect(mockedApi.forkRun).toHaveBeenCalledWith(1, {
+      checkpoint_id: 'cp-1',
+      from_stage: 'coding',
+    })
+    expect(run).toEqual(newRun)
+    expect(store.forking).toBe(false)
+    expect(store.detail?.id).toBe(1)
+    expect(mockedApi.getRun).toHaveBeenCalledTimes(1)
   })
 })

@@ -23,6 +23,7 @@ const statusOptions: Array<{ value: RunStatus | ''; label: string }> = [
   { value: '', label: '全部状态' },
   { value: 'queued', label: '排队中' },
   { value: 'running', label: '运行中' },
+  { value: 'paused', label: '已暂停' },
   { value: 'waiting_approval', label: '待审批' },
   { value: 'succeeded', label: '成功' },
   { value: 'failed', label: '失败' },

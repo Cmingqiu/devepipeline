@@ -4,6 +4,10 @@ import type { RunEvent, RunEventType } from '@/api/types'
 
 export const RUN_EVENT_TYPES: RunEventType[] = [
   'run_started',
+  'run_pausing',
+  'run_paused',
+  'run_resumed',
+  'forked',
   'stage_started',
   'llm_token',
   'tool_started',
@@ -28,6 +32,7 @@ export interface RunStreamCallbacks {
   onDecision?: (event: RunEvent) => void
   onArtifactSaved?: (event: RunEvent) => void
   onPullRequestCreated?: (event: RunEvent) => void
+  onRunPaused?: (event: RunEvent) => void
   onStreamError?: (event: RunEvent) => void
   onRunFinished?: (event: RunEvent) => void
 }
@@ -210,6 +215,10 @@ export function useRunStream(
         break
       case 'pull_request_created':
         callbacks.onPullRequestCreated?.(event)
+        break
+      case 'run_paused':
+        callbacks.onRunPaused?.(event)
+        stop()
         break
       case 'error':
         callbacks.onStreamError?.(event)

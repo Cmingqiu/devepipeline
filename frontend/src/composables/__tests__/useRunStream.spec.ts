@@ -171,6 +171,29 @@ describe('composables/useRunStream', () => {
     expect(stream.status.value).toBe('closed')
   })
 
+  it('run_paused 触发回调并关闭连接', () => {
+    const onRunPaused = vi.fn()
+    const stream = useRunStream(() => 1, { onRunPaused })
+    stream.start()
+    const source = FakeEventSource.instances[0]!
+
+    source.notifyOpen()
+    source.emit('run_paused', { status: 'paused', checkpoint_id: 'cp-1' }, 2)
+
+    expect(onRunPaused).toHaveBeenCalledTimes(1)
+    expect(onRunPaused.mock.calls[0]?.[0]?.payload).toEqual({
+      status: 'paused',
+      checkpoint_id: 'cp-1',
+    })
+    expect(stream.status.value).toBe('closed')
+    expect(source.closed).toBe(true)
+    expect(stream.timeline.value).toHaveLength(1)
+
+    const size = stream.timeline.value.length
+    source.emit('llm_token', { text: 'x' }, 3)
+    expect(stream.timeline.value).toHaveLength(size)
+  })
+
   it('stage_finished 清理该阶段 token 缓冲', () => {
     const stream = useRunStream(() => 1)
     stream.start()

@@ -6,6 +6,10 @@ export type EventTone = 'default' | 'info' | 'success' | 'warning' | 'danger'
 
 export const RUN_EVENT_META: Record<RunEventType, { label: string; tone: EventTone }> = {
   run_started: { label: '运行开始', tone: 'info' },
+  run_pausing: { label: '暂停中', tone: 'warning' },
+  run_paused: { label: '已暂停', tone: 'warning' },
+  run_resumed: { label: '已继续', tone: 'info' },
+  forked: { label: '已 fork', tone: 'info' },
   stage_started: { label: '阶段开始', tone: 'info' },
   llm_token: { label: 'Token', tone: 'default' },
   tool_started: { label: '工具调用', tone: 'info' },
@@ -53,6 +57,25 @@ export function formatEventSummary(
     case 'run_started': {
       const status = text(payload.status) || 'queued'
       return payload.resumed ? `断点续跑（${status}）` : `开始运行（${status}）`
+    }
+    case 'run_pausing':
+      return '已请求暂停，将在当前节点结束后生效'
+    case 'run_paused': {
+      const checkpoint = text(payload.checkpoint_id)
+      return checkpoint ? `已暂停（checkpoint ${checkpoint.slice(0, 8)}）` : '已暂停'
+    }
+    case 'run_resumed': {
+      const status = text(payload.status) || 'running'
+      return `继续运行（${status}）`
+    }
+    case 'forked': {
+      const source = num(payload.source_run_id)
+      const checkpoint = text(payload.checkpoint_id)
+      const fromStage = text(payload.from_stage)
+      const head = source !== null ? `源自运行 #${source}` : '从 checkpoint fork'
+      const checkpointText = checkpoint ? `（${checkpoint.slice(0, 8)}）` : ''
+      const stageText = fromStage ? `，起始阶段：${stageLabel(fromStage)}` : ''
+      return `${head}${checkpointText}${stageText}`
     }
     case 'stage_started':
       return `进入阶段：${stageLabel(text(payload.stage))}`
