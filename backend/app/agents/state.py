@@ -39,6 +39,8 @@ class StageOutcome(TypedDict, total=False):
     started_at: str
     finished_at: str
     usage: dict[str, int]
+    provider: str
+    model: str
     artifact: dict[str, Any]
 
 
@@ -52,6 +54,8 @@ class PipelineState(TypedDict, total=False):
     raw_requirement: str
     agents_md: str
     skill_index: list[dict[str, str]]
+    # 每阶段生效模型（不含密钥）：{stage: {provider_id, provider, endpoint, model, params, source}}
+    model_bindings: dict[str, dict[str, Any]]
     # 各阶段产物
     analysis_doc: str
     design_doc: str

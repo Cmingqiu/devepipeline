@@ -7,7 +7,6 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.llm import assert_provider_ready
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.db.base import utcnow
@@ -94,8 +93,10 @@ async def create_run(
     if version is None:
         raise NotFoundError(f"需求版本 v{version_no} 不存在")
 
-    # 没有 key 时直接 422，不要跑到一半才失败
-    assert_provider_ready()
+    # 没有可用 key 时直接 422，不要跑到一半才失败
+    from app.services.provider_service import assert_bindings_ready
+
+    await assert_bindings_ready(session, requirement.project_id)
 
     run = PipelineRun(
         project_id=requirement.project_id,
@@ -279,7 +280,9 @@ async def retry_run(session: AsyncSession, run_id: int) -> PipelineRun:
     if not getattr(snapshot, "next", None):
         raise ConflictError("该运行已走到终点，没有可继续的断点；请重新启动一次运行")
 
-    assert_provider_ready()
+    from app.services.provider_service import assert_bindings_ready
+
+    await assert_bindings_ready(session, run.project_id)
     run.status = "running"
     run.error_code = None
     run.error_message = None
@@ -387,7 +390,9 @@ async def fork_run(session: AsyncSession, run_id: int, payload) -> PipelineRun:
     requirement = await session.get(Requirement, parent.requirement_id)
     if requirement is None:
         raise NotFoundError("需求不存在")
-    assert_provider_ready()
+    from app.services.provider_service import assert_bindings_ready
+
+    await assert_bindings_ready(session, parent.project_id)
 
     new_run = PipelineRun(
         project_id=parent.project_id,

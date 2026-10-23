@@ -23,6 +23,36 @@ def _force_inline_queue(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(get_settings(), "queue_backend", "inline", raising=False)
 
 
+_REAL_RESOLVE_BINDINGS = None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_model_bindings(monkeypatch: pytest.MonkeyPatch):
+    """测试库与用户库共用：用户的 global model_binding 不能影响其他用例（否则会调真实模型）。
+
+    需要验证绑定解析的用例依赖 `real_model_bindings` 恢复真实实现。
+    """
+    global _REAL_RESOLVE_BINDINGS
+    from app.services import provider_service
+
+    if _REAL_RESOLVE_BINDINGS is None:
+        _REAL_RESOLVE_BINDINGS = provider_service.resolve_project_bindings
+
+    async def _empty(session, project_id):
+        return {}
+
+    monkeypatch.setattr(provider_service, "resolve_project_bindings", _empty)
+
+
+@pytest.fixture
+def real_model_bindings(monkeypatch: pytest.MonkeyPatch):
+    from app.services import provider_service
+
+    monkeypatch.setattr(
+        provider_service, "resolve_project_bindings", _REAL_RESOLVE_BINDINGS
+    )
+
+
 @pytest.fixture(autouse=True)
 async def _close_global_resources():
     """pytest-asyncio 每个用例一个新事件循环；全局连接池必须跟着关，否则下个用例复用会报

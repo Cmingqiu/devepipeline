@@ -235,8 +235,14 @@ async def _run_stage(
     kind: str,
     tools: list[Any] | None = None,
 ) -> dict[str, Any]:
+    from app.agents.model_registry import get_run_model
+    from app.core.config import get_settings
+
     started = _now_iso()
-    model = get_chat_model(stage)
+    bindings = state.get("model_bindings") or {}
+    binding = bindings.get(stage) or {}
+    settings = get_settings()
+    model = get_run_model(state.get("run_id"), stage) or get_chat_model(stage)
     system, user = prompt_builder(state)
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
 
@@ -253,6 +259,8 @@ async def _run_stage(
         "started_at": started,
         "finished_at": finished,
         "usage": usage,
+        "provider": str(binding.get("provider") or settings.llm_provider_name),
+        "model": str(binding.get("model") or settings.llm_model),
         "tool_rounds": tool_rounds,
         "artifact": {
             "kind": kind,

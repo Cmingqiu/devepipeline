@@ -18,7 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.agents.graph import NODE_TO_STAGE, build_graph
-from app.agents.llm import ProviderNotConfigured, assert_provider_ready
+from app.agents.llm import ProviderNotConfigured
+from app.agents.model_registry import clear_run_models, set_run_models
 from app.agents.tool_registry import clear_run_sandbox, clear_run_tools, set_run_tools
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -128,6 +129,8 @@ def _parse_iso(value: str | None) -> datetime | None:
 
 
 async def _initial_state(session, run: PipelineRun) -> dict[str, Any]:
+    from app.services.provider_service import resolve_project_bindings
+
     version = await session.get(RequirementVersion, run.requirement_version_id)
     prompt_context = await load_prompt_context(session, run.project_id)
     return {
@@ -138,12 +141,53 @@ async def _initial_state(session, run: PipelineRun) -> dict[str, Any]:
         "raw_requirement": version.content if version else "",
         "agents_md": prompt_context["agents_md"],
         "skill_index": prompt_context["skill_index"],
+        # 模型绑定快照：只含 endpoint/model/params/credential_id，不含密钥
+        "model_bindings": await resolve_project_bindings(session, run.project_id),
         "gate_decisions": {},
         "revisions": {},
         "review_round": 0,
         "max_review_rounds": run.max_review_rounds,
         "focus_feedback": "",
     }
+
+
+async def _assert_ready(session, run: PipelineRun) -> None:
+    """启动/恢复前校验每阶段都能拿到密钥（绑定 provider 或环境变量）。"""
+    from app.services.provider_service import assert_bindings_ready
+
+    await assert_bindings_ready(session, run.project_id)
+
+
+async def _load_models(
+    run_id: int, bindings: dict[str, Any] | None, events: EventLogger
+) -> None:
+    """按冻结的绑定构造每阶段模型；没有绑定的阶段继续走环境变量默认。"""
+    from app.agents.llm import build_chat_model
+    from app.services.provider_service import stage_secret
+
+    models: dict[str, Any] = {}
+    async with get_session_factory()() as session:
+        for stage, config in (bindings or {}).items():
+            if not config or not config.get("provider_id"):
+                continue
+            try:
+                secret = await stage_secret(session, config)
+                models[stage] = build_chat_model(config, secret or "")
+            except Exception as exc:  # noqa: BLE001  单个 provider 坏了降级到 env 默认
+                logger.warning(
+                    "model_bind_failed",
+                    extra={"run_id": run_id, "stage": stage, "error": str(exc)[:200]},
+                )
+                await events.emit(
+                    "error",
+                    {
+                        "code": "model_unavailable",
+                        "message": f"{stage}: {str(exc)[:400]}（该阶段回退环境变量默认 provider）",
+                    },
+                    stage=stage,
+                )
+    if models:
+        set_run_models(run_id, models)
 
 
 async def sync_requirement_status(session, run: PipelineRun, run_status: str) -> None:
@@ -209,7 +253,7 @@ async def _execute(
             payload: Any = Command(resume=resume_payload)
         elif fork_payload is not None:
             try:
-                assert_provider_ready()
+                await _assert_ready(session, run)
             except ProviderNotConfigured as exc:
                 await _fail(run_id, exc.code, exc.message, events)
                 return
@@ -218,7 +262,7 @@ async def _execute(
             payload = None
         else:
             try:
-                assert_provider_ready()
+                await _assert_ready(session, run)
             except ProviderNotConfigured as exc:
                 await _fail(run_id, exc.code, exc.message, events)
                 return
@@ -258,6 +302,14 @@ async def _execute(
         resolved_tools = await _load_tools(run, events)
     if resolved_tools:
         set_run_tools(run_id, resolved_tools)
+
+    # 模型绑定：首次执行看初始 state；resume/continue/fork 看 checkpoint 里的快照
+    if isinstance(payload, dict):
+        model_bindings = payload.get("model_bindings") or {}
+    else:
+        snapshot = await graph.aget_state(config)
+        model_bindings = (snapshot.values or {}).get("model_bindings") or {}
+    await _load_models(run_id, model_bindings, events)
 
     control_checked_at = 0.0
     try:
@@ -302,6 +354,7 @@ async def _execute(
     finally:
         clear_run_tools(run_id)
         clear_run_sandbox(run_id)
+        clear_run_models(run_id)
 
     await batcher.flush_all()
     await _finalize(run_id, graph, config, events)
@@ -578,8 +631,8 @@ async def _persist_stage(
                 stage_run = StageRun(run_id=run_id, stage=stage, attempt=attempt)
                 session.add(stage_run)
             stage_run.status = "succeeded"
-            stage_run.provider = settings.llm_provider_name
-            stage_run.model = settings.llm_model
+            stage_run.provider = str(outcome.get("provider") or settings.llm_provider_name)
+            stage_run.model = str(outcome.get("model") or settings.llm_model)
             stage_run.prompt_tokens = usage.get("prompt_tokens")
             stage_run.completion_tokens = usage.get("completion_tokens")
             stage_run.duration_ms = duration_ms
