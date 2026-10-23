@@ -167,6 +167,7 @@ export type RunEventType =
   | 'llm_token'
   | 'tool_started'
   | 'tool_finished'
+  | 'progress'
   | 'usage'
   | 'artifact_saved'
   | 'stage_finished'
