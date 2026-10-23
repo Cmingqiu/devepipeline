@@ -2,7 +2,7 @@
 
 AI 辅助软件开发平台：需求录入 → 需求分析 → 系统设计 → 编码 → PR 评审，每个阶段结束停人工审批（Human-in-the-Loop）。
 
-当前进度：**M1 / M2 / M3 / M4 完成**（需求管理 → 4 阶段流水线 + 人工审批 → arq + SSE 实时面板 → 上下文配置 + 编码 agent 工具）。M3 剩余（暂停/fork）、多 provider、M5 待做。
+当前进度：**M1 / M2 / M3 / M4 完成；M5 沙箱部分完成**（需求 → 4 阶段流水线 + 人工审批 → arq/SSE → 上下文与工具 → 编码沙箱）。M5 剩余（GitHub PR）、M3 剩余（暂停/fork）、多 provider 待做。
 
 - 整体架构、双库边界、LangGraph 状态机、ER、API、页面清单：[docs/architecture.md](docs/architecture.md)
 - VPS 基础设施（MariaDB / PostgreSQL / Redis）启动与验收：[deploy/README.md](deploy/README.md)
@@ -156,12 +156,21 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 - 前端：`/projects/:id/settings` 四个 Tab（AGENTS.md 编辑与版本、Skills 上传/文件树预览、MCP JSON 编辑与测试、仓库与凭证），凭证只显示 hint；运行时间线展示工具调用与结果。
 - 事件落库修复：`close()` 取消在途 flush 会整批丢事件（实测丢 `interrupt`），改为取消时把批次放回缓冲并等任务退出。
 
+## M5 已实现（编码沙箱）
+
+- `code_workspaces`（迁移 `503586198009`）：每个 run 一个 clone 目录 `workspaces/run-{id}` + `devpipeline/run-{id}` 分支，记录 base/head sha。
+- 命令执行：按 argv 拆分、**不经 shell**；白名单（git / pytest / pnpm / npm / node / ruff / tsc / dotnet / go…）+ 危险模式拒绝 + 120s 默认超时 + 8KB 输出截断。
+- 沙箱工具：`sandbox_list_files` / `read_file` / `write_file` / `run_command` / `git_diff`；coding 产物 = 模型说明 + `git diff` + 命令与测试记录。
+- 隔离与恢复：路径越界拒绝；审批后继续执行复用同一目录（先校验 HEAD，坏目录自动重建）。
+- 失败降级：沙箱起不来时 coding 退回纯文本 diff 草案，原因写进时间线（`sandbox_unavailable`）。
+- 接口：`GET /api/v1/runs/{id}/workspaces` 暴露 worktree 路径与分支。
+
 ## 未实现（后续里程碑）
 
+- M5 剩余：推送分支 + 创建 GitHub PR（`pull_requests` 表与 VCS 抽象）、Docker 沙箱模式、workspace 清理策略（当前只建不删，磁盘会涨）。
 - M4 剩余：多 provider / 每阶段模型选择（`llm_providers` / `model_bindings` 表尚未建，当前走环境变量单一 provider）；
   技能仍以 SKILL.md 全量注入为主，`read_skill_file` 只覆盖额外脚本/资料。
 - M3 剩余：暂停（worker 边界）、从任意 checkpoint `fork` 重跑。
-- M5：编码沙箱（git worktree / Docker）+ 白名单命令 + GitHub PR + 评审回退落代码。
 
 ## 已知约束（踩过的坑，别再踩）
 
@@ -186,3 +195,6 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | `APP_SECRET_KEY` 不能随意更换 | 凭证密文由它派生；换了之后旧凭证解不开（`credential_decrypt_failed`），需要重新填 token |
 | 工具对象不能进 state | MCP 客户端/句柄不可序列化，进 checkpoint 会炸；执行器按 run 注册进程内 registry，节点按 run_id 取 |
 | MCP 工具输出要归一化 | adapters 返回 content blocks（[{"type":"text","text":"5"}]），直接 str 回灌模型会很脏；先拆成纯文本 |
+| Windows selector loop 不支持子进程 | psycopg 要求 selector，但 selector 没有 `create_subprocess_exec`（实测 NotImplementedError）；沙箱命令统一 `asyncio.to_thread(subprocess.run)` |
+| 沙箱命令必须走白名单 | 不经 shell 只解决注入，不解决 `rm -rf`；白名单 + 危险模式双重拦截，默认 120s 超时 |
+| workspace 复用前要校验 HEAD | 中断留下的半个目录直接复用会让 clone 状态错乱；`git rev-parse --verify HEAD` 失败就重建 |
