@@ -548,7 +548,7 @@ erDiagram
 | `base_sha` / `head_sha` | CHAR(40) | NULL |
 | `spec_json` | LONGTEXT | NULL，镜像/CPU/内存/超时等 |
 | `created_at` | DATETIME(3) | NOT NULL |
-| `cleaned_at` | DATETIME(3) | NULL，清理时间（失败不清理，便于排查） |
+| `cleaned_at` | DATETIME(3) | NULL，清理时间；`succeeded` 自动清，失败/取消保留，超保留期由 worker 兜底 |
 | 索引 | | INDEX(`run_id`) |
 
 #### pull_requests — PR
@@ -713,6 +713,7 @@ erDiagram
 | GET | `/api/v1/runs/{run_id}/events` | 历史事件：`?after_seq=&types=&page_size=`，最多 1000 条 |
 | GET | `/api/v1/runs/{run_id}/stream` | SSE，见 §5.3 |
 | GET | `/api/v1/runs/{run_id}/workspaces` | 沙箱工作区列表（路径/分支/SHA/清理状态） |
+| DELETE | `/api/v1/runs/{run_id}/workspaces` | 手动清理工作区（只允许终态 run，否则 409） |
 | GET | `/api/v1/runs/{run_id}/pull-requests` | PR 列表（provider/number/url/status） |
 
 **配置与图**
@@ -1012,8 +1013,9 @@ curl -s -X POST localhost:8000/api/v1/projects/1/mcp/test -H 'content-type: appl
 `code_workspaces`/`pull_requests`；评审前推送分支 + 创建/复用 GitHub PR；评审驳回 → 编码回退受
 `max_review_rounds` 约束。
 
-落地状态（2026-10-23）：worktree 沙箱、命令白名单、PR 创建与 API 已完成；Docker 模式与
-workspace 清理策略未做。PR 客户端 `app/vcs/`（Protocol + httpx GitHub 实现，GitLab 仅抛错占位）。
+落地状态（2026-10-23）：worktree 沙箱、命令白名单、PR 创建与 API、工作区清理均已完成；Docker 模式未做。
+PR 客户端 `app/vcs/`（Protocol + httpx GitHub 实现，GitLab 仅抛错占位）。
+工作区清理由 `app/services/workspace_service.py` 负责：成功即清、失败保留、保留期兜底（worker 每日 cron）。
 
 验收：
 ```bash
@@ -1023,6 +1025,8 @@ conda run -n devpipeline pytest tests/integration/pg/test_sandbox_pipeline.py -q
 conda run -n devpipeline pytest tests/integration/pg/test_pull_request_pipeline.py -q
 # GitHub REST 客户端（respx 回放：创建、已存在 422 回查、鉴权失败）
 conda run -n devpipeline pytest tests/unit/test_vcs_github.py -q
+# 工作区清理：成功自动清、失败保留、保留期/孤儿兜底、手动 API（409/幂等）
+conda run -n devpipeline pytest tests/integration/pg/test_workspace_cleanup.py -q
 ```
 期望：`max_review_rounds=2` 时，第 3 次驳回后 run 终止为 `failed`，`error_code=review_round_exceeded`，且不再调用模型。
 

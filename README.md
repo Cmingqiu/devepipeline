@@ -171,10 +171,18 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
   评审继续用本地 diff；`pull_request_created` 事件实时进时间线；`GET /api/v1/runs/{id}/pull-requests` 暴露结果。
 - 前端：运行详情页 Pull Request 面板（provider/状态/分支/链接），时间线支持 PR 创建事件。
 
+## M5 已实现（工作区清理）
+
+- 成功即清：run 到 `succeeded` 时执行器自动删除 `workspaces/run-{id}` 并写 `code_workspaces.cleaned_at`，
+  时间线补一条 `progress`（`cleaned_workspaces`）。开关：`WORKSPACE_CLEANUP_ON_SUCCESS`（默认 true）。
+- 失败/取消保留：便于排查，不自动删；由保留期兜底（`WORKSPACE_RETENTION_DAYS`，默认 7 天），
+  worker 每日 03:30 跑 `purge_workspaces`，同时清理库里已无对应行的孤儿目录。
+- 手动清理：`DELETE /api/v1/runs/{id}/workspaces`，只允许终态 run（进行中/等审批返回 409，避免抽走正在用的沙箱）。
+- 安全边界：只删 `workspaces` 根目录内的路径（DB 被改坏也不会变成任意文件删除）；单目录删除失败只告警不中断。
+
 ## 未实现（后续里程碑）
 
-- M5 剩余：Docker 沙箱模式、workspace 清理策略（当前只建不删，磁盘会涨）；PR 状态（merged/closed）只在建 PR 时写入，
-  没有轮询刷新。
+- M5 剩余：Docker 沙箱模式；PR 状态（merged/closed）只在建 PR 时写入，没有轮询刷新。
 - M4 剩余：多 provider / 每阶段模型选择（`llm_providers` / `model_bindings` 表尚未建，当前走环境变量单一 provider）；
   技能仍以 SKILL.md 全量注入为主，`read_skill_file` 只覆盖额外脚本/资料。
 - M3 剩余：暂停（worker 边界）、从任意 checkpoint `fork` 重跑。
@@ -209,3 +217,5 @@ $p = Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/projects `
 | 沙箱 git commit 的 message 必须 argv 直传 | `run_command` 走 shlex 拆分，未加引号的 message（含空格/中文）会被拆成多条 pathspec，git 报 `pathspec did not match`；`Workspace.commit` 改用 `_run_git` |
 | push 带 token 的命令必须脱敏 | `git push https://x-access-token:<token>@…` 会进命令记录，git 报错还会回显完整 URL；`display_command` + 输出替换成 `***` |
 | PR 失败不能阻断评审 | 推送/API 失败只发 `error(pr_unavailable)` 并继续本地 diff 评审；PR 是交付物不是前置条件 |
+| workspace 清理只允许终态 | 等审批/运行中的目录还要被 resume 复用，删了等于抽走正在用的沙箱；自动路径只在 `succeeded` 执行 |
+| 保留期清理要扫孤儿目录 | run 行被删后目录没人认领，只按 DB 行清会永久残留；按目录 mtime 扫并顺手清 |
