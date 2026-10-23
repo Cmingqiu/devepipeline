@@ -1271,6 +1271,72 @@ a {
   flex: none;
 }
 
+/* ---------- 模型提供商 / 每阶段绑定 ---------- */
+
+.model-provider-name {
+  font-weight: 600;
+}
+
+.model-provider-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.model-binding-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.model-binding-row {
+  display: grid;
+  grid-template-columns: 130px minmax(180px, 220px) minmax(150px, 200px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+}
+
+.model-binding-row__stage {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.model-binding-row__label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.model-binding-row__effective {
+  grid-column: 1 / -1;
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+
+.model-binding-row__tags {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+@media (width <= 960px) {
+  .model-binding-row {
+    grid-template-columns: 1fr;
+  }
+
+  .model-binding-row__tags {
+    justify-content: flex-start;
+  }
+}
+
 @media (width <= 1100px) {
   .settings-layout {
     grid-template-columns: 1fr;

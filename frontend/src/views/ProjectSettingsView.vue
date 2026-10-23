@@ -7,6 +7,7 @@ import { useRoute } from 'vue-router'
 import { getProject } from '@/api/projects'
 import AgentDocEditor from '@/components/AgentDocEditor.vue'
 import McpPanel from '@/components/McpPanel.vue'
+import ModelPanel from '@/components/ModelPanel.vue'
 import RepoPanel from '@/components/RepoPanel.vue'
 import SkillPanel from '@/components/SkillPanel.vue'
 import { useContextStore } from '@/stores/context'
@@ -59,7 +60,7 @@ function loadProject(): void {
       <div class="page-head__text">
         <h1 class="page-title">项目设置</h1>
         <p class="page-subtitle">
-          配置 AGENTS.md、技能包、MCP 服务器与仓库凭证；修改会用于后续流水线运行。
+          配置 AGENTS.md、技能包、MCP 服务器、模型与仓库凭证；修改会用于后续流水线运行。
         </p>
       </div>
     </header>
@@ -75,6 +76,10 @@ function loadProject(): void {
 
       <el-tab-pane label="MCP" name="mcp" lazy>
         <McpPanel :project-id="projectId" />
+      </el-tab-pane>
+
+      <el-tab-pane label="模型" name="model" lazy>
+        <ModelPanel :project-id="projectId" />
       </el-tab-pane>
 
       <el-tab-pane label="仓库与凭证" name="repo" lazy>

@@ -202,6 +202,71 @@ export type RunEventType =
   | 'error'
   | 'run_finished'
 
+export type BindingScope = 'project' | 'global'
+
+export type BindingSource = 'project' | 'global' | 'env'
+
+/** LLM 提供商（OpenAI 兼容端点）；configured 表示密钥可用 */
+export interface Provider {
+  id: number
+  name: string
+  endpoint: string
+  model: string
+  enabled: boolean
+  credential_id: number | null
+  configured: boolean
+  credential_hint: string | null
+  extra: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export interface ProviderCreatePayload {
+  name: string
+  endpoint: string
+  model: string
+  api_key?: string
+  extra?: Record<string, unknown>
+  enabled?: boolean
+}
+
+export interface ProviderUpdatePayload {
+  name?: string
+  endpoint?: string
+  model?: string
+  api_key?: string
+  extra?: Record<string, unknown>
+  enabled?: boolean
+}
+
+/** 每阶段生效的模型绑定（固定 analysis/design/coding/review 四条） */
+export interface ModelBinding {
+  stage: RunStage
+  provider_id: number | null
+  provider_name: string | null
+  model: string | null
+  params: Record<string, unknown>
+  source: BindingSource
+  configured: boolean
+  /** 项目层原始覆盖值；为空表示继承 provider 默认（不要用生效的 model 回填） */
+  override_model: string | null
+  override_params: Record<string, unknown>
+}
+
+/** PUT /model-bindings 的单条；provider_id=null 表示回退 global/env */
+export interface ModelBindingInput {
+  stage: RunStage
+  provider_id: number | null
+  model?: string | null
+  params?: Record<string, unknown>
+}
+
+export interface ModelBindingSavePayload {
+  project_id?: number
+  scope: BindingScope
+  items: ModelBindingInput[]
+}
+
 /** 事件历史与 SSE 归并后的统一结构 */
 export interface RunEvent {
   seq: number
